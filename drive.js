@@ -62,11 +62,11 @@ export class GoogleAuth {
   }
 }
 export class Drive {
-  constructor({ auth, apiKey, folder, fetcher = globalThis.fetch.bind(globalThis) }) { this.auth = auth; this.apiKey = apiKey; this.folder = folder; this.fetcher = fetcher; }
+  constructor({ auth, folder, fetcher = globalThis.fetch.bind(globalThis) }) { this.auth = auth; this.folder = folder; this.fetcher = fetcher; }
   async request(path, options = {}, upload = false) {
     if (!this.auth.valid) throw new DriveError('Google 授權已過期，請按「重新連線」；尚未同步的記錄仍保留在本機', 401);
     const base = upload ? 'https://www.googleapis.com/upload/drive/v3/' : 'https://www.googleapis.com/drive/v3/';
-    const url = new URL(path, base); if (this.apiKey) url.searchParams.set('key', this.apiKey);
+    const url = new URL(path, base);
     const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 30000);
     let response;
     try {
@@ -80,7 +80,6 @@ export class Drive {
       if (response.status === 401) { this.auth.clear?.(); message = 'Google 授權已失效，請重新連線；本機資料不受影響'; }
       else if (reason === 'storageQuotaExceeded') message = 'Google Drive 空間不足，請釋放空間後重新同步';
       else if (reason === 'accessNotConfigured' || reason === 'SERVICE_DISABLED') message = 'Google Cloud 專案尚未啟用 Google Drive API';
-      else if (/API_KEY|keyInvalid|ipRefererBlocked|forbidden/i.test(reason + ' ' + (body.error?.message || '')) && /key|refer/i.test(body.error?.message || '')) message = 'API Key 無效或網站限制不符，請檢查 Key 的 API 與網站限制';
       else if (response.status === 403 && /rateLimit|quota|RESOURCE_EXHAUSTED/i.test(reason)) message = 'Google Drive 暫時限制請求頻率，資料已保留，稍後重試';
       else if (response.status === 403) message = '目前帳號沒有資料夾讀寫權限，或 Google 專案限制了存取；請檢查共用權限及 OAuth 設定';
       else if (response.status === 404) message = '找不到資料夾或資料檔；也可能目前帳號沒有存取權限';

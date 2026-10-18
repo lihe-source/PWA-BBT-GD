@@ -9,7 +9,7 @@ const PREFIX = `${APP}:${BASE.pathname}`;
 const kv = new IndexedKV(PREFIX);
 const repo = new Repository(kv);
 const auth = new GoogleAuth();
-const S = { key: 'local', dataset: 'local', meta: null, ws: null, view: project([]), prefs: { theme: 'dark', mode: 'day', range: '30' }, config: {}, engine: null, syncState: '', page: 'chart', editor: 'temperature', historyLimit: 40, backupLimit: 5, selectedBackup: '', series: [], selection: '', scrollToSelection: true, recordContext: null, periodContext: null, dirty: { record: false, period: false, profile: false, cloud: false }, saving: false, syncing: false, ready: false, selectedTheme: 'dark' };
+const S = { key: 'local', dataset: 'local', meta: null, ws: null, view: project([]), prefs: { theme: 'light', mode: 'day', range: '30' }, config: {}, engine: null, syncState: '', page: 'chart', editor: 'temperature', historyLimit: 40, backupLimit: 5, selectedBackup: '', series: [], selection: '', scrollToSelection: true, recordContext: null, periodContext: null, dirty: { record: false, period: false, profile: false, cloud: false }, saving: false, syncing: false, ready: false, selectedTheme: 'light' };
 let toastTimer, syncTimer, draftTimer, refreshTimer, activationTimer, modalResolve, updateBusy = false, reloadInProgress = false, swRegistration = null;
 let currentUpdate = null, profileContext = null;
 const channel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel(PREFIX) : null;
@@ -27,7 +27,7 @@ function theme(value) {
   S.selectedTheme = value;
   const dark = value === 'dark' || (value === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
   document.documentElement.dataset.theme = dark ? 'dark' : 'light';
-  document.querySelector('meta[name=theme-color]').content = dark ? '#19161f' : '#f6f2f1';
+  document.querySelector('meta[name=theme-color]').content = dark ? '#19161f' : '#fff8f3';
 }
 
 function openModal(title, html, actions = []) {
@@ -51,7 +51,7 @@ function captureForms() {
     record: { date: $('record-date').value, time: $('record-time').value, temperature: $('record-temperature').value, basal: $('record-basal').checked, primary: $('record-primary').checked, conditions: [...document.querySelectorAll('[name=condition]:checked')].map(e => e.value), notes: $('record-notes').value },
     period: { start: $('period-start').value, end: $('period-end').value },
     profile: { name: $('profile-name').value, cycleLength: $('cycle-length').value, timeZone: $('time-zone').value },
-    cloud: { apiKey: $('api-key').value, clientId: $('client-id').value, folder: $('folder-input').value }
+    cloud: { clientId: $('client-id').value, folder: $('folder-input').value }
   };
 }
 function emergencyDraft(draft = captureForms()) { try { localStorage.setItem(`${PREFIX}:draft:${S.key}`, JSON.stringify(draft)); } catch { /* IndexedDB write is still attempted */ } return draft; }
@@ -75,7 +75,7 @@ async function loadDraft() {
   }
   if (S.dirty.period && saved.period) { $('period-start').value = saved.period.start || ''; $('period-end').value = saved.period.end || ''; S.periodContext = saved.periodContext || S.periodContext; $('period-form-title').textContent = S.periodContext?.id ? '編輯月經記錄' : '月經記錄'; }
   if (S.dirty.profile && saved.profile) { $('profile-name').value = saved.profile.name || ''; $('cycle-length').value = saved.profile.cycleLength || ''; ensureZone(saved.profile.timeZone); $('time-zone').value = saved.profile.timeZone; profileContext = saved.profileContext || profileContext; }
-  if (S.dirty.cloud && saved.cloud) { $('api-key').value = saved.cloud.apiKey || ''; $('client-id').value = saved.cloud.clientId || ''; $('folder-input').value = saved.cloud.folder || ''; }
+  if (S.dirty.cloud && saved.cloud) { $('client-id').value = saved.cloud.clientId || ''; $('folder-input').value = saved.cloud.folder || ''; }
 }
 
 function resetRecord(persist = true) {
@@ -95,7 +95,7 @@ function populateProfile(force = false) {
   const p = S.view.profile; ensureZone(p.timeZone); $('profile-name').value = p.name; $('cycle-length').value = p.cycleLength; $('time-zone').value = p.timeZone;
   profileContext = { parents: S.view.entities.get('profile:main')?.heads.map(e => e.rev) || [], barrier: S.view.barrier };
 }
-function populateCloud() { $('api-key').value = S.config.apiKey || ''; $('client-id').value = S.config.clientId || ''; $('folder-input').value = S.config.folderId ? `https://drive.google.com/drive/folders/${S.config.folderId}` : ''; }
+function populateCloud() { $('client-id').value = S.config.clientId || ''; $('folder-input').value = S.config.folderId ? `https://drive.google.com/drive/folders/${S.config.folderId}` : ''; }
 function setEditor(value) { S.editor = value; $('record-form').hidden = value !== 'temperature'; $('period-form').hidden = value !== 'period'; document.querySelectorAll('[data-editor]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.editor === value))); }
 function navigate(page) {
   if (!['chart', 'records', 'settings'].includes(page)) page = 'chart';
@@ -270,15 +270,14 @@ async function deletePeriod(id) {
 }
 
 function connectionValues() {
-  const apiKey = $('api-key').value.trim(), clientId = $('client-id').value.trim(), folder = folderId($('folder-input').value);
-  if (!apiKey) throw new Error('請填入 Google Drive API Key');
+  const clientId = $('client-id').value.trim(), folder = folderId($('folder-input').value);
   if (!/^[A-Za-z0-9_-]+\.apps\.googleusercontent\.com$/.test(clientId)) throw new Error('OAuth Client ID 格式不正確，需以 .apps.googleusercontent.com 結尾');
-  return { apiKey, clientId, folderId: folder };
+  return { clientId, folderId: folder };
 }
 async function saveConnection(event) {
   event?.preventDefault(); const config = connectionValues();
   if (S.engine?.running || S.syncing || auth.pending) throw new Error('目前正在登入或同步，完成後再修改連線設定');
-  const changed = ['apiKey', 'clientId', 'folderId'].some(k => S.config[k] !== config[k]);
+  const changed = ['clientId', 'folderId'].some(k => S.config[k] !== config[k]);
   S.config = { ...S.config, ...config };
   await kv.set('connection', S.config); S.dirty.cloud = false;
   if (changed) { S.engine = null; auth.clear(); S.syncState = ''; }
@@ -293,7 +292,7 @@ async function connectGoogle(forceAccount = false) {
   busy($('connect-google'), true); busy($('switch-account'), true);
   try {
     await authorization;
-    const drive = new Drive({ auth, apiKey: config.apiKey, folder: config.folderId });
+    const drive = new Drive({ auth, folder: config.folderId });
     const [account, folder] = await Promise.all([drive.account(), drive.verifyFolder()]); auth.account = account;
     await flushDraft();
     const key = `${account.sub}:${config.folderId}`, dataset = `drive:${config.folderId}`;
@@ -546,7 +545,6 @@ function bind() {
   $('temperature-chart').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectPoint(e.target); } });
   $('theme-select').addEventListener('change', () => { S.prefs.theme = $('theme-select').value; theme(S.prefs.theme); savePrefs().catch(fail); });
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (S.prefs.theme === 'system') theme('system'); });
-  $('toggle-key').addEventListener('click', () => { $('api-key').type = $('api-key').type === 'password' ? 'text' : 'password'; $('toggle-key').textContent = $('api-key').type === 'password' ? '顯示' : '隱藏'; });
   const actions = { 'disconnect-google': disconnectGoogle, 'sync-now': () => performSync(true), 'test-connection': async () => { if (!S.engine || !auth.valid) throw new Error('請先登入 Google'); const info = await S.engine.drive.verifyFolder(); toast(`「${info.name}」可正常讀寫`); }, 'refresh-backups': refreshBackups, 'manual-backup': manualBackup, 'restore-backup': restoreSelectedBackup, 'export-json': exportJSON, 'export-csv': async () => download(`BBT-${today()}.csv`, csv(S.view), 'text/csv;charset=utf-8'), 'check-update': () => checkUpdate(true) };
   for (const [id, action] of Object.entries(actions)) $(id).addEventListener('click', () => Promise.resolve().then(() => action()).catch(fail));
   // OAuth starts directly in the click handler, preserving Safari's user gesture.
@@ -592,10 +590,14 @@ async function init() {
   bind();
   try {
     const [preferences, config, active, update] = await Promise.all([kv.get('preferences'), kv.get('connection'), kv.get('active-workspace'), kv.get('update-check')]);
-    S.prefs = { ...S.prefs, ...preferences }; S.config = config || {}; theme(S.prefs.theme);
+    S.prefs = { ...S.prefs, ...preferences };
+    // Apply the requested light default once; later explicit theme choices remain persistent.
+    if (S.prefs.themeDefaultsVersion !== 1) { S.prefs.theme = 'light'; S.prefs.themeDefaultsVersion = 1; }
+    S.config = { clientId: config?.clientId || '', folderId: config?.folderId || '', lastEmail: config?.lastEmail || '' };
+    await savePrefs(); await kv.set('connection', S.config); theme(S.prefs.theme);
     if (active?.key && active.dataset === `drive:${active.folderId}`) { S.key = active.key; S.dataset = active.dataset; S.meta = active; }
     if (update) { $('latest-version').textContent = update.version; $('last-update-check').textContent = formatStamp(update.at); }
-    await refresh(); await loadDraft(); S.ready = true; renderAll(); navigate(location.hash.slice(1) || 'chart');
+    await refresh(); await loadDraft(); await flushDraft(); S.ready = true; renderAll(); navigate(location.hash.slice(1) || 'chart');
     if (navigator.onLine) loadGoogle().catch(() => {});
     setupServiceWorker().then(() => checkUpdate(false)).catch(() => {});
     setInterval(() => { if (document.visibilityState === 'visible') queueSync(0); }, 60000);

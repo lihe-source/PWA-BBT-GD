@@ -234,24 +234,24 @@ test('corrupted foreign remote data cannot partially merge into the local store'
   await assert.rejects(a.sync.sync()); assert.equal((await a.repo.read('device', D)).events.length, 0);
 });
 test('REST client refuses expired auth without sending any network request', async () => {
-  let called = false; const drive = new Drive({ auth: { valid: false }, apiKey: 'test', folder: 'folder123456789', fetcher: async () => { called = true; } });
+  let called = false; const drive = new Drive({ auth: { valid: false }, folder: 'folder123456789', fetcher: async () => { called = true; } });
   await assert.rejects(drive.list(), e => e instanceof DriveError && e.status === 401); assert.equal(called, false);
 });
 test('REST list follows every page, limits queries to the selected folder and sends tokens only as headers', async () => {
   const urls = [];
-  const drive = new Drive({ auth: { valid: true, token: 'test-token' }, apiKey: 'test-key', folder: 'folder123456789', fetcher: async (url, init) => {
-    urls.push(url); assert.equal(init.headers.Authorization, 'Bearer test-token'); assert.ok(!url.includes('test-token'));
+  const drive = new Drive({ auth: { valid: true, token: 'test-token' }, folder: 'folder123456789', fetcher: async (url, init) => {
+    urls.push(url); assert.equal(init.headers.Authorization, 'Bearer test-token'); assert.ok(!url.includes('test-token')); assert.equal(new URL(url).searchParams.has('key'), false);
     const next = new URL(url).searchParams.get('pageToken'); return new Response(JSON.stringify(next ? { files: [{ id: 'two' }] } : { files: [{ id: 'one' }], nextPageToken: 'next' }));
   } });
   const files = await drive.list(); assert.equal(files.length, 2); assert.equal(urls.length, 2); assert.ok(new URL(urls[0]).searchParams.get('q').includes("'folder123456789' in parents"));
 });
 test('REST client surfaces Drive storage quota errors distinctly', async () => {
-  const drive = new Drive({ auth: { valid: true, token: 't' }, apiKey: '', folder: 'folder123456789', fetcher: async () => new Response(JSON.stringify({ error: { errors: [{ reason: 'storageQuotaExceeded' }] } }), { status: 403 }) });
+  const drive = new Drive({ auth: { valid: true, token: 't' }, folder: 'folder123456789', fetcher: async () => new Response(JSON.stringify({ error: { errors: [{ reason: 'storageQuotaExceeded' }] } }), { status: 403 }) });
   await assert.rejects(drive.list(), /空間不足/);
 });
 test('REST upload retries a preallocated ID after HTTP 409 and checks the existing content', async () => {
   const payload = change([], 'r', record());
-  const drive = new Drive({ auth: { valid: true, token: 't' }, apiKey: '', folder: 'folder123456789', fetcher: async (url, init) => {
+  const drive = new Drive({ auth: { valid: true, token: 't' }, folder: 'folder123456789', fetcher: async (url, init) => {
     if (init.method === 'POST') { assert.match(init.body, /"id":"preallocated"/); return new Response('{}', { status: 409 }); }
     return new Response(JSON.stringify(new URL(url).searchParams.get('alt') === 'media' ? payload : { id: 'preallocated', createdTime: '2026-10-18T01:00:00Z', properties: { bbtKind: 'event' } }));
   } });
@@ -281,7 +281,7 @@ test('shipped page references existing assets and has every JavaScript-addressed
   const html = await readFile(new URL('./index.html', import.meta.url), 'utf8'); const js = await readFile(new URL('./app.js', import.meta.url), 'utf8');
   const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map(m => m[1]); assert.equal(new Set(ids).size, ids.length, 'duplicate HTML id');
   for (const match of js.matchAll(/\$\('([^']+)'\)/g)) assert.ok(ids.includes(match[1]), `missing #${match[1]}`);
-  for (const match of html.matchAll(/(?:src|href)="\.\/([^"#]+)"/g)) await access(new URL(match[1], import.meta.url));
+  for (const match of html.matchAll(/(?:src|href)="\.\/([^"#]+)"/g)) await access(new URL(match[1].split('?')[0], import.meta.url));
   const manifest = JSON.parse(await readFile(new URL('./manifest.webmanifest', import.meta.url), 'utf8'));
   assert.equal(manifest.start_url, './'); assert.equal(manifest.scope, './'); for (const icon of manifest.icons) await access(new URL(icon.src, import.meta.url));
   assert.equal(JSON.parse(await readFile(new URL('./version.json', import.meta.url))).version, VERSION);
@@ -310,7 +310,7 @@ async function appHarness() {
   const context = { ...Core, ...DB, ...Cloud, h: Core.escapeHTML, URL, Date, Intl, Map, Set, Array, Object, Math, Number, String, JSON, Promise, console, crypto: globalThis.crypto, document, navigator, innerWidth: 390, isSecureContext: true, localStorage: { setItem() {} }, location: { reload: () => { reloads++; } }, setTimeout, clearTimeout, setInterval, clearInterval, AbortController, fetch, matchMedia: () => ({ matches: true, addEventListener() {} }) };
   let source = await readFile(new URL('./app.js', import.meta.url), 'utf8');
   source = source.replace(/^import .+;\n/gm, '').replaceAll('import.meta.url', JSON.stringify(new URL('./app.js', import.meta.url).href)).replace(/\ninit\(\);\s*$/, '\n');
-  source += '\nglobalThis.__app = { S, kv, renderChart, setupServiceWorker };';
+  source += '\nglobalThis.__app = { S, kv, renderChart, setupServiceWorker, connectionValues, captureForms };';
   vm.runInNewContext(source, context); context.__app.kv.set = async () => {};
   return { app: context.__app, element, handlers, get reloads() { return reloads; } };
 }
@@ -337,4 +337,17 @@ test('first service-worker install does not reload, but a subsequent update in t
   await changed(); assert.equal(ui.reloads, 0);
   await changed(); assert.equal(ui.reloads, 1);
   await changed(); assert.equal(ui.reloads, 1);
+});
+
+test('connection settings accept only Client ID and folder, and drafts do not require an API Key field', async () => {
+  const ui = await appHarness();
+  ui.element('client-id').value = '123-test.apps.googleusercontent.com';
+  ui.element('folder-input').value = 'https://drive.google.com/drive/folders/folder123456789';
+  const values = ui.app.connectionValues();
+  assert.deepEqual(Object.keys(values).sort(), ['clientId', 'folderId']);
+  assert.equal(values.folderId, 'folder123456789');
+  const html = await readFile(new URL('./index.html', import.meta.url), 'utf8');
+  assert.doesNotMatch(html, /id="api-key"|id="toggle-key"/);
+  const draft = ui.app.captureForms();
+  assert.deepEqual(Object.keys(draft.cloud).sort(), ['clientId', 'folder']);
 });

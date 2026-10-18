@@ -1,11 +1,19 @@
-# V1.0.0 驗證紀錄
+# V1.0.1 驗證紀錄
 
 驗證日期：2026-10-18。測試資料全為虛構，不包含個人健康資料或 Google 憑證。
+
+## 本版修改驗證
+
+- 雲端設定不再要求 API Key；Client ID 與資料夾位置可完成表單驗證，草稿不引用已移除的 API Key 元素。
+- Drive 請求使用 Bearer token，模擬 REST 分頁測試確認 URL 不含 key 參數。
+- 檢查淺色首次顯示、既有偏好的一次性遷移程式，以及新版圖示來源／manifest／快取檔案路徑。
+- 明亮 icon 已完成 PNG 視覺檢查；一般與 iOS 舊檔名也同步更新，新增帶版本號的圖示檔案以刷新快取。
+- 原有曲線、同步、備份還原及更新生命週期測試仍通過。
 
 ## 已執行
 
 - `app.js`、`core.js`、`db.js`、`drive.js`、`sw.js`、`release.mjs` JavaScript 語法檢查。
-- `node --test tests.mjs`：**44 項通過，0 項失敗**。
+- `node --test tests.mjs`：**45 項通過，0 項失敗**。
 - HTML 元素識別碼唯一性、程式引用的元素存在性、相對資產與 manifest 圖示路徑。
 - PNG 圖示尺寸：192、512、maskable 512、iOS 180。
 - ZIP 完整性、ZIP 根資料夾與 ZIP 檔名一致、資料夾內無子資料夾。
@@ -29,7 +37,7 @@
 
 ## 尚未驗證
 
-1. 未取得使用者的 API Key、OAuth Client ID、Google 帳號或 Drive 資料夾，因此未做真實 OAuth 授權、Drive 讀寫與跨帳號共用測試。
+1. 未取得使用者的 OAuth Client ID、Google 帳號或 Drive 資料夾，因此未做真實 OAuth 授權、Drive 讀寫與跨帳號共用測試。
 2. 未指定實際 GitHub Repository，未建立或部署公開網站，未驗證實際 Pages 網址。
 3. 本執行環境沒有 Sites 流程所需的 control-browser 能力，依其規範未啟動預覽或改用其他瀏覽器途徑。因此未完成真實瀏覽器、iPhone／iPad／Windows 版面、鍵盤、安全區、主畫面安裝、離線重啟與快取更新的操作測試。
 4. 未做醫療器材、排卵預測準確度或避孕有效性驗證。顯示結果僅作記錄與趨勢參考。

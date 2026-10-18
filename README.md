@@ -1,19 +1,27 @@
-# 溫序 BBT｜PWA-BBT-GD V1.0.0
+# 溫序 BBT｜PWA-BBT-GD V1.0.1
 
 女性每日體溫與月經週期記錄 PWA。原生 HTML / CSS / JavaScript，不需 npm install、不需編譯、不需後端，可直接放上 GitHub Pages。
 
 ## 先完成這三件事
 
 1. 把解壓縮後資料夾內的程式檔案，上傳到 GitHub Repository 根目錄並啟用 Pages。
-2. 在 Google Cloud 建立 Drive API Key 與 Web 類型 OAuth Client ID。
-3. 在 PWA「設定 → 帳戶與雲端」貼上 API Key、Client ID、Drive 資料夾連結，再按「登入並同步」。
+2. 在 Google Cloud 啟用 Google Drive API，建立 Web 類型 OAuth Client ID。
+3. 在 PWA「設定 → 帳戶與雲端」貼上 OAuth Client ID 與 Drive 資料夾連結，再按「登入並同步」。
 
-本 ZIP 不包含真實 Google 憑證或個人資料，也尚未代為建立或部署 GitHub Repository。API Key 與 Client ID 不相同，兩者都需要；不要輸入 Client Secret 或服務帳戶金鑰。
+本 ZIP 不包含真實 Google 憑證或個人資料，也尚未代為建立或部署 GitHub Repository。此版本只需要 OAuth Web Client ID 與資料夾位置，不需要 API Key；不要輸入 Client Secret 或服務帳戶金鑰。
+
+## V1.0.1 更新內容
+
+- 雲端設定只保留 OAuth Web Client ID 與 Drive 資料夾，已移除 API Key 欄位、必填檢查及請求參數。
+- 使用明亮的珊瑚橘／薄荷綠／暖黃色 icon，包含 iOS、一般 PWA、maskable 圖示；新增圖示版本路徑以刷新資產快取，也更新舊路徑圖檔。
+- 淺色為預設，搭配暖白背景與珊瑚粉重點色。新安裝直接使用淺色；V1.0.0 更新後首次會套用一次淺色，之後自行選擇深色／跟隨系統會照常保留。
+- 保留既有 Client ID、資料夾位置、帳戶、待同步佇列與健康記錄；清理舊連線設定中已不使用的 API Key。
+- 已使用 V1.0.0 者，將本版全部檔案上傳同一個 Repository 根目錄，再開啟原 PWA 或在設定按「檢查更新」，不需清除網站資料。
 
 ## GitHub Pages 部署
 
 1. 建立 Repository，例如 `PWA-BBT-GD`。請勿把個人健康記錄或 Google 私鑰放進 Repository。
-2. 解壓縮 `PWA-BBT-GD-V1_0_0.zip`，進入同名資料夾。
+2. 解壓縮 `PWA-BBT-GD-V1_0_1.zip`，進入同名資料夾。
 3. 將資料夾內檔案平鋪上傳至 Repository 根目錄，確認根目錄直接看得到 `index.html`、`app.js`、`sw.js`、`version.json` 等檔案。
 4. 到 Repository → **Settings → Pages**：Source 選 **Deploy from a branch**，Branch 選 **main**，Folder 選 **/(root)**，按 Save。
 5. 等待 GitHub 顯示發佈網址，通常為 `https://你的帳號.github.io/PWA-BBT-GD/`。
@@ -30,17 +38,7 @@
 
 開啟 [Google Cloud Console](https://console.cloud.google.com/)，選取或建立專案，在 **APIs & Services → Library** 啟用 **Google Drive API**。
 
-### 2. 建立 API Key
-
-在 Credentials 建立 API Key。建議限制：
-
-- Application restrictions：**Websites / HTTP referrers**。
-- 允許網站：`https://你的帳號.github.io/*`；若用自訂網域，另加自訂網域。
-- API restrictions：**Restrict key → Google Drive API**。
-
-此程式沒有使用 Google Picker API，不需要啟用 Picker。若在本機以 localhost 開發，另加入該 localhost 的網站限制；完成開發後移除不需要的來源。
-
-### 3. 設定 OAuth 同意畫面
+### 2. 設定 OAuth 同意畫面
 
 在 **Google Auth platform** 設定 Branding / Audience / Data Access。填寫應用程式名稱與支援信箱。若使用個人 Google 帳號，選適用的外部使用者類型；測試狀態下將所有實際要使用的帳號加入 Test users。
 
@@ -55,7 +53,7 @@ profile
 
 為支援直接指定資料夾、不同帳號共同同步新資料及新備份，使用 Drive 的較廣讀寫範圍。應用程式所有 Drive 查詢與新增檔案都限制在使用者指定的資料夾，但 OAuth 授權本身不是資料夾級的強制限制。正式公開提供多人使用時，須依 Google 的應用程式類型、發布狀態與權限範圍處理驗證要求；不能把測試名單當成公開發佈。
 
-### 4. 建立 Web Client ID
+### 3. 建立 Web Client ID
 
 Clients → Create client → Application type：**Web application**。
 
@@ -65,9 +63,9 @@ Clients → Create client → Application type：**Web application**。
 https://lihe-source.github.io
 ```
 
-這裡**不含 Repository 路徑，不加 `/PWA-BBT-GD/`**。本程式使用彈出式 token flow，不需要填寫程式的 redirect endpoint，也不使用 Client Secret。API Key 與 Client ID 建議來自同一個 Google Cloud 專案。
+這裡**不含 Repository 路徑，不加 `/PWA-BBT-GD/`**。本程式使用彈出式 token flow，不需要填寫程式的 redirect endpoint，也不使用 Client Secret。使用者完成 OAuth 授權後，程式直接以 Authorization: Bearer 存取 Drive REST API，不附加 API Key。
 
-### 5. 準備 Drive 資料夾
+### 4. 準備 Drive 資料夾
 
 在 Google Drive 建立專用資料夾，例如「BBT-Rex」。將資料夾完整網址貼到 PWA 設定即可，不需要自行擷取 ID。
 
@@ -137,7 +135,7 @@ Google Drive 內的 `bbt-event-*.json` 是異動來源，`bbt-backup-*.json` 是
 
 ### 資料保管
 
-API Key／Client ID／資料夾設定保存在該瀏覽器的本機資料庫，不隨健康資料備份。API Key 是網站應用程式識別設定，仍應設定網站與 API 限制。Drive JSON 與匯出 JSON 沒有額外的應用程式端加密；存取控制由 Google Drive 與使用裝置的保護提供。
+Client ID／資料夾設定保存在該瀏覽器的本機資料庫，不隨健康資料備份。Drive JSON 與匯出 JSON 沒有額外的應用程式端加密；存取控制由 Google Drive 與使用裝置的保護提供。
 
 共用裝置上的瀏覽器本機快取不是密碼保護的帳戶保險箱。登出會離開雲端資料畫面，但不刪除本機快取與待上傳記錄。撤銷 Drive 共用權限不能遠端移除其他裝置已下載的副本。
 
@@ -164,7 +162,6 @@ npm test
 |---|---|
 | Google 登入被拒絕／origin_mismatch | Client 類型必須是 Web；來源填 `https://帳號.github.io`，不要加專案路徑。 |
 | access_denied／未驗證應用程式 | 檢查 OAuth 測試使用者、發布狀態、同意畫面與使用的 scopes。 |
-| API Key 無效／網站限制不符 | Key 限制需允許實際 Pages 網址，且啟用 Google Drive API。 |
 | 找不到資料夾 | 確認是資料夾連結；登入帳號須有權限，且資料夾不在垃圾桶。 |
 | 沒有寫入權限 | 請資料夾擁有者設為「編輯者」，並檢查 Workspace 政策。 |
 | 公司網路阻擋 Google | 換用可正常連上 Google Drive 的網路；待傳資料仍保留在本機。 |
