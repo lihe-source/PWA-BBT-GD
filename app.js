@@ -15,7 +15,7 @@ let currentUpdate = null, profileContext = null;
 const channel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel(PREFIX) : null;
 
 function toast(message, error = false) { clearTimeout(toastTimer); $('toast').textContent = message; $('toast').classList.toggle('error', error); $('toast').hidden = false; toastTimer = setTimeout(() => { $('toast').hidden = true; }, error ? 6500 : 3500); }
-function fail(error) { console.warn('BBT action failed:', error.name || 'Error'); toast(error.message || '操作未完成，請重試', true); }
+function fail(error) { if (error.reason === 'logout') return; console.warn('BBT action failed:', error.name || 'Error'); toast(error.message || '操作未完成，請重試', true); }
 function fatal(error) { $('fatal-banner').hidden = false; $('fatal-banner').textContent = `本機儲存無法正常使用：${error.message}。請勿清除瀏覽器資料；可先重新開啟程式，或改用一般瀏覽模式。`; }
 function busy(button, value) { if (button) { button.disabled = value; button.setAttribute('aria-busy', String(value)); } }
 function broadcast() { channel?.postMessage({ type: 'data', key: S.key }); }
@@ -284,28 +284,40 @@ async function saveConnection(event) {
   await flushDraft(); renderSettings(); renderStatus(); toast('設定已儲存，按「登入並同步」連線');
 }
 async function connectGoogle(forceAccount = false) {
+  if (S.loggingOut) throw new Error('正在登出，請稍候再登入');
   if (S.syncing || S.engine?.running) throw new Error('目前正在同步，請完成後再切換帳號');
+  if (auth.pending) throw new Error('Google 登入視窗已開啟，請先完成或登出後重新選擇帳號');
   const config = connectionValues();
+  const session = S.sessionId = (S.sessionId || 0) + 1;
+  const guard = () => { if (session !== S.sessionId) { const e = new Error('本次登入已取消'); e.reason = 'logout'; throw e; } };
   // Start the OAuth popup directly inside the click's user gesture.
   S.engine = null; auth.clear();
   const authorization = auth.connect(config.clientId, forceAccount ? '' : (S.config.lastEmail || ''));
-  busy($('connect-google'), true); busy($('switch-account'), true);
+  busy($('connect-google'), true); busy($('switch-account'), true); renderSettings();
   try {
     await authorization;
+    guard();
     const drive = new Drive({ auth, folder: config.folderId });
-    const [account, folder] = await Promise.all([drive.account(), drive.verifyFolder()]); auth.account = account;
+    S.loginDrive = drive;
+    const [account, folder] = await Promise.all([drive.account(), drive.verifyFolder()]); guard(); auth.account = account;
     await flushDraft();
+    guard();
     const key = `${account.sub}:${config.folderId}`, dataset = `drive:${config.folderId}`;
     const localSource = S.key === 'local' && S.ws.events.length ? clone(S.ws.events) : null;
     S.config = { ...config, lastEmail: account.email }; await kv.set('connection', S.config);
+    guard();
     S.key = key; S.dataset = dataset; S.meta = { key, dataset, folderId: config.folderId, folderName: folder.name, email: account.email, sub: account.sub }; await kv.set('active-workspace', S.meta);
-    S.engine = new SyncEngine({ repo, drive, key, dataset, onStatus: (status, error) => { if (S.engine?.key !== key) return; S.syncState = status; renderStatus(); if (error) $('sync-error').textContent = error.message; } });
+    guard();
+    const engine = new SyncEngine({ repo, drive, key, dataset, onStatus: (status, error) => { if (S.engine !== engine) return; S.syncState = status; renderStatus(); if (error) $('sync-error').textContent = error.message; } });
+    S.engine = engine; S.loginDrive = null;
     S.selectedBackup = ''; S.backupLimit = 5; await refresh(); await loadDraft(); await performSync(true);
+    guard();
     const migrationStamp = localSource?.map(e => e.id).sort().join('|');
     if (localSource && await kv.get(`migration:${key}`) !== migrationStamp) {
       const source = project(localSource);
       if (!source.conflicts.length && !source.stale.length && !source.restoreConflict) {
         const take = await confirmAction('加入尚未連線的本機記錄？', `<p>本機未連線區有 ${statistics(source).days} 天、${source.records.length} 筆體溫。</p><p>目前已開啟 <b>${h(folder.name)}</b>。可將這些記錄複製合併進此資料夾；本機原始資料仍保留。</p>`, '合併進此資料夾');
+        guard();
         if (take) {
           const changes = currentState(source).filter(e => (e.type !== 'profile' || !S.view.entities.has('profile:main')) && stable(S.view.entities.get(entityKey(e.type, e.id))?.value) !== stable(e.value)).map(e => ({ ...e, ...(S.view.entities.has(entityKey(e.type, e.id)) ? { parents: [] } : {}) }));
           if (changes.length) { await repo.change(S.key, S.dataset, actor(), changes); await refresh({ notify: true }); await performSync(true); }
@@ -315,14 +327,31 @@ async function connectGoogle(forceAccount = false) {
     }
     if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});
     renderSettings(); toast('已連線，資料已檢查並同步');
-  } catch (e) { if (!S.engine) auth.clear(); throw e; }
-  finally { busy($('connect-google'), false); busy($('switch-account'), false); renderSettings(); renderStatus(); }
+  } catch (e) { if (session !== S.sessionId) return; if (!S.engine) { S.loginDrive?.cancel(); S.loginDrive = null; auth.clear(); } throw e; }
+  finally { if (session === S.sessionId) { busy($('connect-google'), false); busy($('switch-account'), false); renderSettings(); renderStatus(); } }
 }
-async function disconnectGoogle() {
-  if (S.syncing || S.engine?.running) throw new Error('同步中，請完成後再登出');
-  await flushDraft();
-  auth.clear(); S.engine = null; S.syncState = ''; S.key = 'local'; S.dataset = 'local'; S.meta = null; S.selectedBackup = ''; S.dirty = { record: false, period: false, profile: false, cloud: false };
-  await kv.set('active-workspace', null); await refresh(); await loadDraft(); renderSettings(); renderStatus(); toast('已登出；雲端區的本機快取及待傳記錄仍保留');
+async function disconnectGoogle({ remote = false } = {}) {
+  if (S.loggingOut) return;
+  S.loggingOut = true; S.sessionId = (S.sessionId || 0) + 1;
+  clearTimeout(syncTimer); S.engine?.drive.cancel?.(); S.loginDrive?.cancel?.(); S.loginDrive = null;
+  auth.clear(); S.engine = null; S.syncing = false; S.syncPromise = null; S.syncState = '';
+  busy($('disconnect-google'), true); busy($('connect-google'), true); busy($('switch-account'), true); busy($('sync-now'), false);
+  try {
+    await flushDraft();
+    const config = await kv.get('connection') || S.config;
+    S.config = { clientId: config.clientId || '', folderId: config.folderId || '', lastEmail: '' };
+    await kv.set('connection', S.config);
+    await kv.set('active-workspace', null);
+    S.key = 'local'; S.dataset = 'local'; S.meta = null; S.selectedBackup = ''; S.historyLimit = 40; S.backupLimit = 5;
+    S.dirty = { record: false, period: false, profile: false, cloud: false };
+    if ($('modal').open) closeModal();
+    $('history-date').value = '';
+    if (!remote) channel?.postMessage({ type: 'logout' });
+    await refresh(); await loadDraft(); await flushDraft();
+    toast('已登出 Google 帳戶；待同步記錄已保留，下次登入可重新選擇帳號');
+  } finally {
+    S.loggingOut = false; busy($('connect-google'), false); busy($('switch-account'), false); renderSettings(); renderStatus();
+  }
 }
 function queueSync(delay = 1800) { clearTimeout(syncTimer); if (!S.engine || !auth.valid || !navigator.onLine) { renderStatus(); return; } syncTimer = setTimeout(() => { performSync(false).catch(() => {}); }, delay); }
 async function performSync(manual = false) {
@@ -339,8 +368,8 @@ async function performSync(manual = false) {
     if (!S.dirty.record) resetRecord(false);
     if (!S.dirty.period) resetPeriod(false);
     if (manual) toast(S.view.conflicts.length || S.view.stale.length || S.view.restoreConflict ? '已同步，請處理資料差異' : '同步完成');
-  } catch (e) { if (S.engine === engine) await refresh(); if (manual) throw e; }
-  finally { S.syncing = false; busy($('sync-now'), false); renderStatus(); if (S.ws?.outbox.length && S.syncState === 'done') queueSync(1500); } };
+  } catch (e) { if (S.engine !== engine) return; await refresh(); if (manual) throw e; }
+  finally { if (S.engine === engine) { S.syncing = false; busy($('sync-now'), false); renderStatus(); if (S.ws?.outbox.length && S.syncState === 'done') queueSync(1500); } } };
   S.syncPromise = run(); return S.syncPromise;
 }
 function renderStatus() {
@@ -360,7 +389,11 @@ function renderSettings() {
   const connected = Boolean(S.engine && auth.valid);
   $('account-state').textContent = connected ? '已連線' : S.meta ? '需要重新連線' : '尚未連線';
   $('account-description').textContent = S.meta ? `${S.meta.email} · ${connected ? '授權有效' : '本機快取可離線使用，雲端同步需重新授權'}` : '先完成下方設定，再登入 Google。每個資料夾對應一位被記錄者。';
-  $('connect-google').textContent = S.meta ? '重新連線並同步' : '登入並同步'; $('disconnect-google').hidden = !S.meta;
+  $('connect-google').textContent = S.meta ? '重新連線並同步' : '登入並同步';
+  $('google-account-email').textContent = S.meta?.email || auth.account?.email || '尚未登入 Google 帳戶';
+  $('google-account-detail').textContent = auth.pending ? 'Google 登入處理中，可按登出取消' : connected ? '已連線 Google Drive' : S.meta ? '授權已過期，可重新連線或登出' : '登入後可同步，登出後回到本機模式';
+  $('disconnect-google').hidden = false;
+  busy($('disconnect-google'), S.loggingOut || !(S.meta || auth.valid || auth.pending || S.config.lastEmail));
   $('switch-account').hidden = !S.config.lastEmail;
   $('workspace-label').textContent = S.meta ? S.meta.folderName || 'Google Drive 資料夾' : '本機未連線資料';
   $('last-sync').textContent = formatStamp(S.ws.lastSync, S.view.profile.timeZone);
@@ -578,7 +611,7 @@ function bind() {
   window.addEventListener('offline', () => renderStatus());
   window.addEventListener('pagehide', () => { emergencyDraft(); });
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && S.ready) { refresh().then(() => queueSync(0)).catch(fail); if (!updateBusy) checkUpdate(false); } else if (S.ready) flushDraft().catch(() => {}); });
-  channel?.addEventListener('message', e => { if (e.data.type === 'data' && e.data.key === S.key) refresh().catch(fail); });
+  channel?.addEventListener('message', e => { if (e.data.type === 'logout') disconnectGoogle({ remote: true }).catch(fail); else if (e.data.type === 'data' && e.data.key === S.key) refresh().catch(fail); });
   if (window.visualViewport) { const resize = () => { document.body.classList.toggle('keyboard-open', visualViewport.height < innerHeight * .77 && /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName)); }; visualViewport.addEventListener('resize', resize); document.addEventListener('focusout', () => setTimeout(resize, 100)); }
   window.addEventListener('resize', () => { clearTimeout(refreshTimer); refreshTimer = setTimeout(() => { if (S.page === 'chart') renderChart(); }, 150); });
 }

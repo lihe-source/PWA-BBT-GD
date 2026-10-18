@@ -1,4 +1,4 @@
-# 溫序 BBT｜PWA-BBT-GD V1.0.1
+# 溫序 BBT｜PWA-BBT-GD V1.0.2
 
 女性每日體溫與月經週期記錄 PWA。原生 HTML / CSS / JavaScript，不需 npm install、不需編譯、不需後端，可直接放上 GitHub Pages。
 
@@ -9,6 +9,22 @@
 3. 在 PWA「設定 → 帳戶與雲端」貼上 OAuth Client ID 與 Drive 資料夾連結，再按「登入並同步」。
 
 本 ZIP 不包含真實 Google 憑證或個人資料，也尚未代為建立或部署 GitHub Repository。此版本只需要 OAuth Web Client ID 與資料夾位置，不需要 API Key；不要輸入 Client Secret 或服務帳戶金鑰。
+
+## V1.0.2 更新內容
+
+新增明確的 Google 帳戶操作區，位置為「設定 → 帳戶與雲端」最上方。區塊顯示目前 Google 帳號、連線狀態與固定的「登出 Google 帳戶」按鈕。
+
+- 已登入、授權過期或曾記住帳號時，可按登出；完全未登入時按鈕維持顯示但停用。
+- 登出會保存當前表單草稿、停止雲端連線與自動同步，清除目前存取憑證及上次帳號提示，再回到本機模式。
+- 未上傳的體溫、草稿、備份與待傳佇列保留在原帳號／資料夾區域。再次登入原帳號與同一資料夾後可接續同步。
+- 登出後重新按「登入並同步」，Google 會提供帳號選擇，不自動指定上次帳號。
+- Google 登入尚未完成時也可取消；稍後才回傳的舊授權結果不會把帳號重新登入。
+- 同步途中登出會停止尚未完成的網路請求；已送抵 Google 的請求可能已完成，仍以原操作 ID／預先保存的遠端檔案 ID 去重，待傳記錄不刪除。
+- 同一瀏覽器、同一 PWA 的其他已開啟分頁會收到登出通知；不同裝置的連線不受影響。
+
+此功能登出本 PWA 的 Google 連線。Safari、Gmail、Google 網站等其他服務的 Google 登入狀態不會因此改變，也不會刪除 Google Drive 檔案或撤銷其他裝置的 Google 授權。
+
+更新方式：將本版完整程式上傳原 Repository 根目錄，等待 GitHub Pages 發佈完成後，回原 PWA「設定 → 檢查更新」。不需清除網站資料。
 
 ## V1.0.1 更新內容
 
@@ -21,7 +37,7 @@
 ## GitHub Pages 部署
 
 1. 建立 Repository，例如 `PWA-BBT-GD`。請勿把個人健康記錄或 Google 私鑰放進 Repository。
-2. 解壓縮 `PWA-BBT-GD-V1_0_1.zip`，進入同名資料夾。
+2. 解壓縮 `PWA-BBT-GD-V1_0_2.zip`，進入同名資料夾。
 3. 將資料夾內檔案平鋪上傳至 Repository 根目錄，確認根目錄直接看得到 `index.html`、`app.js`、`sw.js`、`version.json` 等檔案。
 4. 到 Repository → **Settings → Pages**：Source 選 **Deploy from a branch**，Branch 選 **main**，Folder 選 **/(root)**，按 Save。
 5. 等待 GitHub 顯示發佈網址，通常為 `https://你的帳號.github.io/PWA-BBT-GD/`。

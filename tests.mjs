@@ -302,15 +302,15 @@ test('service worker never intercepts Google APIs, version.json or another repos
 async function appHarness() {
   const elements = new Map(), handlers = new Map(); let reloads = 0;
   const element = key => {
-    if (!elements.has(key)) elements.set(key, { innerHTML: '', textContent: '', value: '', checked: false, hidden: false, open: false, clientWidth: 340, scrollLeft: 0, dataset: {}, setAttribute() {}, querySelector: selector => element(`${key}:${selector}`), querySelectorAll: () => [] });
+    if (!elements.has(key)) elements.set(key, { innerHTML: '', textContent: '', value: '', checked: false, hidden: false, open: false, clientWidth: 340, scrollLeft: 0, dataset: {}, options: [{ value: 'Asia/Taipei' }], classList: { toggle() {} }, reset() {}, setAttribute() {}, querySelector: selector => element(`${key}:${selector}`), querySelectorAll: () => [] });
     return elements.get(key);
   };
   const document = { getElementById: element, querySelector: element, querySelectorAll: () => [], documentElement: { dataset: {} }, activeElement: null };
   const navigator = { onLine: true, serviceWorker: { controller: null, addEventListener: (name, fn) => handlers.set(name, fn), register: async () => ({ waiting: null }) } };
-  const context = { ...Core, ...DB, ...Cloud, h: Core.escapeHTML, URL, Date, Intl, Map, Set, Array, Object, Math, Number, String, JSON, Promise, console, crypto: globalThis.crypto, document, navigator, innerWidth: 390, isSecureContext: true, localStorage: { setItem() {} }, location: { reload: () => { reloads++; } }, setTimeout, clearTimeout, setInterval, clearInterval, AbortController, fetch, matchMedia: () => ({ matches: true, addEventListener() {} }) };
+  const context = { ...Core, ...DB, ...Cloud, h: Core.escapeHTML, URL, Date, Intl, Map, Set, Array, Object, Math, Number, String, JSON, Promise, console, crypto: globalThis.crypto, document, navigator, innerWidth: 390, isSecureContext: true, localStorage: { setItem() {}, getItem() { return null; } }, location: { reload: () => { reloads++; } }, setTimeout: (fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return t; }, clearTimeout, setInterval, clearInterval, AbortController, fetch, matchMedia: () => ({ matches: true, addEventListener() {} }) };
   let source = await readFile(new URL('./app.js', import.meta.url), 'utf8');
   source = source.replace(/^import .+;\n/gm, '').replaceAll('import.meta.url', JSON.stringify(new URL('./app.js', import.meta.url).href)).replace(/\ninit\(\);\s*$/, '\n');
-  source += '\nglobalThis.__app = { S, kv, renderChart, setupServiceWorker, connectionValues, captureForms };';
+  source += '\nglobalThis.__app = { S, kv, repo, auth, disconnectGoogle, renderSettings, renderChart, setupServiceWorker, connectionValues, captureForms };';
   vm.runInNewContext(source, context); context.__app.kv.set = async () => {};
   return { app: context.__app, element, handlers, get reloads() { return reloads; } };
 }
@@ -350,4 +350,69 @@ test('connection settings accept only Client ID and folder, and drafts do not re
   assert.doesNotMatch(html, /id="api-key"|id="toggle-key"/);
   const draft = ui.app.captureForms();
   assert.deepEqual(Object.keys(draft.cloud).sort(), ['clientId', 'folder']);
+});
+
+test('logout clears account and remembered selection, stops sync, and preserves the old workspace queue and draft', async () => {
+  const ui = await appHarness(), memory = new MemoryKV();
+  for (const name of ['get', 'set', 'update']) ui.app.kv[name] = memory[name].bind(memory);
+  const { S, repo, auth } = ui.app;
+  S.key = 'old-account'; S.dataset = D; S.meta = { email: 'old@example.invalid', folderName: 'Test folder', sub: 'old' };
+  S.config = { clientId: '123.apps.googleusercontent.com', folderId: 'folder123456789', lastEmail: 'old@example.invalid' };
+  await memory.set('connection', clone(S.config)); await memory.set('active-workspace', clone(S.meta));
+  await repo.change(S.key, D, 'old', [{ type: 'record', id: 'unsent', value: record() }]);
+  S.ws = await repo.read(S.key, D); S.view = project(S.ws.events);
+  const before = stable(S.ws.events), pendingId = S.ws.outbox[0];
+  S.dirty.record = true; ui.element('record-temperature').value = '36.8';
+  auth.token = 'private-token'; auth.expiresAt = Date.now() + 3600000; auth.account = { email: 'old@example.invalid' };
+  let cancelled = false; S.engine = { drive: { cancel() { cancelled = true; } }, running: true }; S.syncing = true;
+  ui.app.renderSettings(); assert.equal(ui.element('disconnect-google').disabled, false);
+  await ui.app.disconnectGoogle();
+  assert.equal(cancelled, true); assert.equal(auth.valid, false); assert.equal(auth.account, null);
+  assert.equal(S.engine, null); assert.equal(S.syncing, false); assert.equal(S.key, 'local'); assert.equal(S.meta, null);
+  assert.equal((await memory.get('connection')).lastEmail, '');
+  assert.equal((await memory.get('connection')).clientId, '123.apps.googleusercontent.com');
+  assert.equal(await memory.get('active-workspace'), null);
+  const old = await repo.read('old-account', D); assert.equal(stable(old.events), before); assert.deepEqual(old.outbox, [pendingId]);
+  assert.equal((await memory.get('draft:old-account')).record.temperature, '36.8');
+  assert.equal(ui.element('google-account-email').textContent, '尚未登入 Google 帳戶');
+  assert.equal(ui.element('disconnect-google').hidden, false); assert.equal(ui.element('disconnect-google').disabled, true);
+});
+test('cancelling Google login ignores its late token response and a fresh login opens account selection', async t => {
+  const previous = globalThis.google; t.after(() => { if (previous === undefined) delete globalThis.google; else globalThis.google = previous; });
+  let callbacks, request;
+  globalThis.google = { accounts: { oauth2: { initTokenClient(config) { callbacks = config; return { requestAccessToken(options) { request = options; } }; }, hasGrantedAllScopes() { return true; } } } };
+  const auth = new Cloud.GoogleAuth();
+  const pending = auth.connect('123.apps.googleusercontent.com', 'old@example.invalid');
+  const late = callbacks.callback; auth.clear();
+  await assert.rejects(pending, error => error.reason === 'logout');
+  late({ access_token: 'late-private-token', expires_in: 3600 });
+  assert.equal(auth.token, ''); assert.equal(auth.pending, false);
+  const fresh = auth.connect('123.apps.googleusercontent.com');
+  assert.equal(request.prompt, 'select_account'); assert.equal(callbacks.hint, undefined);
+  callbacks.callback({ access_token: 'new-token', expires_in: 3600 }); await fresh;
+  assert.equal(auth.valid, true); auth.clear();
+});
+test('Drive logout cancellation aborts an active HTTP request and refuses further network requests', async () => {
+  let requests = 0, started;
+  const ready = new Promise(resolve => { started = resolve; });
+  const drive = new Drive({ auth: { valid: true, token: 't' }, folder: 'folder123456789', fetcher: (url, init) => {
+    requests++; started(); return new Promise((resolve, reject) => init.signal.addEventListener('abort', () => { const e = new Error('aborted'); e.name = 'AbortError'; reject(e); }, { once: true }));
+  } });
+  const running = drive.list(); await ready; drive.cancel();
+  await assert.rejects(running, error => error.reason === 'logout');
+  await assert.rejects(drive.list(), error => error.reason === 'logout'); assert.equal(requests, 1);
+});
+test('logout during upload preserves the pending event and its reserved remote file ID for an idempotent retry', async () => {
+  let started; const uploading = new Promise(resolve => { started = resolve; });
+  const drive = new Drive({ auth: { valid: true, token: 't' }, folder: 'folder123456789', fetcher: async (url, init) => {
+    if (init.method === 'POST') { started(); return new Promise((resolve, reject) => init.signal.addEventListener('abort', () => { const e = new Error('aborted'); e.name = 'AbortError'; reject(e); }, { once: true })); }
+    if (url.includes('generateIds')) return new Response(JSON.stringify({ ids: ['reserved-id'] }));
+    return new Response(JSON.stringify({ files: [] }));
+  } });
+  const a = device(drive); await a.repo.change('device', D, 'test', [{ type: 'record', id: 'pending', value: record() }]);
+  const operation = (await a.repo.read('device', D)).outbox[0];
+  const running = a.sync.sync(); await uploading; drive.cancel();
+  await assert.rejects(running, error => error.reason === 'logout');
+  const saved = await a.repo.read('device', D); assert.deepEqual(saved.outbox, [operation]); assert.equal(saved.uploads[operation], 'reserved-id');
+  assert.equal(project(saved.events).records.length, 1);
 });

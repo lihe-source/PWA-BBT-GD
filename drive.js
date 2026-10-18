@@ -31,9 +31,9 @@ export async function loadGoogle() {
   });
 }
 export class GoogleAuth {
-  constructor() { this.token = ''; this.expiresAt = 0; this.account = null; this.pending = false; }
+  constructor() { this.token = ''; this.expiresAt = 0; this.account = null; this.pending = false; this.cancelPending = null; }
   get valid() { return Boolean(this.token && Date.now() < this.expiresAt - 30000); }
-  clear() { this.token = ''; this.expiresAt = 0; this.account = null; }
+  clear() { const cancel = this.cancelPending; this.cancelPending = null; cancel?.(); this.token = ''; this.expiresAt = 0; this.account = null; this.pending = false; }
   connect(clientId, loginHint = '') {
     if (!/^[A-Za-z0-9_-]+\.apps\.googleusercontent\.com$/.test(clientId || '')) return Promise.reject(new Error('請先填入 OAuth Web Client ID')); 
     if (!globalThis.google?.accounts?.oauth2) {
@@ -43,14 +43,17 @@ export class GoogleAuth {
     if (this.pending) return Promise.reject(new Error('登入視窗已開啟，請先完成或關閉該視窗'));
     this.pending = true;
     return new Promise((resolve, reject) => {
-      const finish = (error, response) => { clearTimeout(timeout); this.pending = false; error ? reject(error) : resolve(response); };
+      let settled = false;
+      const finish = (error, response) => { if (settled) return; settled = true; clearTimeout(timeout); this.pending = false; this.cancelPending = null; error ? reject(error) : resolve(response); };
       const timeout = setTimeout(() => finish(new Error('登入未完成，請重新按登入按鈕')), 90000);
+      this.cancelPending = () => finish(new DriveError('已取消本次 Google 登入', 499, 'logout'));
       const client = google.accounts.oauth2.initTokenClient({
         client_id: clientId,
         scope: 'https://www.googleapis.com/auth/drive openid email profile',
         include_granted_scopes: true,
         hint: loginHint || undefined,
         callback: response => {
+          if (settled) return;
           if (response.error) return finish(new Error(response.error === 'access_denied' ? '你尚未同意 Google Drive 存取，資料仍保留在本機' : `Google 授權未完成：${response.error}`));
           if (!google.accounts.oauth2.hasGrantedAllScopes(response, 'https://www.googleapis.com/auth/drive')) return finish(new Error('請同意 Google Drive 讀寫權限後再連線'));
           this.token = response.access_token; this.expiresAt = Date.now() + Number(response.expires_in || 3600) * 1000; finish(null, response);
@@ -62,17 +65,21 @@ export class GoogleAuth {
   }
 }
 export class Drive {
-  constructor({ auth, folder, fetcher = globalThis.fetch.bind(globalThis) }) { this.auth = auth; this.folder = folder; this.fetcher = fetcher; }
+  constructor({ auth, folder, fetcher = globalThis.fetch.bind(globalThis) }) { this.auth = auth; this.folder = folder; this.fetcher = fetcher; this.closed = false; this.controllers = new Set(); }
+  cancel() { this.closed = true; for (const controller of this.controllers) controller.abort(); this.controllers.clear(); }
   async request(path, options = {}, upload = false) {
+    if (this.closed) throw new DriveError('已登出，雲端連線已停止', 499, 'logout');
     if (!this.auth.valid) throw new DriveError('Google 授權已過期，請按「重新連線」；尚未同步的記錄仍保留在本機', 401);
     const base = upload ? 'https://www.googleapis.com/upload/drive/v3/' : 'https://www.googleapis.com/drive/v3/';
     const url = new URL(path, base);
     const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 30000);
+    this.controllers.add(controller);
     let response;
     try {
       response = await this.fetcher(url.href, { ...options, cache: 'no-store', headers: { Authorization: `Bearer ${this.auth.token}`, ...options.headers }, signal: controller.signal });
-    } catch (e) { throw new DriveError(e.name === 'AbortError' ? '雲端連線逾時，資料已保留，稍後會重試' : '雲端目前無法連線，資料已保留，請檢查網路'); }
-    finally { clearTimeout(timeout); }
+    } catch (e) { if (this.closed) throw new DriveError('已登出，雲端連線已停止', 499, 'logout'); throw new DriveError(e.name === 'AbortError' ? '雲端連線逾時，資料已保留，稍後會重試' : '雲端目前無法連線，資料已保留，請檢查網路'); }
+    finally { clearTimeout(timeout); this.controllers.delete(controller); }
+    if (this.closed) throw new DriveError('已登出，雲端連線已停止', 499, 'logout');
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
       const reason = body.error?.errors?.[0]?.reason || body.error?.status || '';
@@ -88,15 +95,18 @@ export class Drive {
     return response;
   }
   async account() {
+    if (this.closed) throw new DriveError('已登出，雲端連線已停止', 499, 'logout');
     const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 15000);
+    this.controllers.add(controller);
     try {
       const res = await this.fetcher('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: `Bearer ${this.auth.token}` }, signal: controller.signal, cache: 'no-store' });
       if (!res.ok) throw new Error('無法確認 Google 帳號，請重新登入');
       const data = await res.json();
+      if (this.closed) throw new DriveError('已登出，雲端連線已停止', 499, 'logout');
       if (!data.sub || !data.email) throw new Error('無法讀取 Google 帳號資訊');
       return { sub: String(data.sub), email: String(data.email), name: String(data.name || data.email) };
-    } catch (e) { if (e.name === 'AbortError') throw new Error('確認 Google 帳號逾時，請重試'); throw e; }
-    finally { clearTimeout(timeout); }
+    } catch (e) { if (this.closed) throw new DriveError('已登出，雲端連線已停止', 499, 'logout'); if (e.name === 'AbortError') throw new Error('確認 Google 帳號逾時，請重試'); throw e; }
+    finally { clearTimeout(timeout); this.controllers.delete(controller); }
   }
   async verifyFolder() {
     const fields = 'id,name,mimeType,trashed,capabilities(canAddChildren,canListChildren)';

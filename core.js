@@ -1,6 +1,6 @@
 /* 溫序 BBT — domain logic, independent of the browser. */
 export const APP = 'bbt-gd';
-export const VERSION = '1.0.1';
+export const VERSION = '1.0.2';
 export const SCHEMA = 1;
 export const CONDITIONS = ['發燒', '睡眠不足', '飲酒', '量測時間不同', '其他干擾'];
 export const DEFAULT_PROFILE = { name: '我的體溫', cycleLength: 28, timeZone: 'Asia/Taipei' };

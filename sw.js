@@ -1,5 +1,5 @@
 /* Cache application files only. Never cache Google APIs, OAuth responses, or user backups. */
-const VERSION = '1.0.1';
+const VERSION = '1.0.2';
 const PREFIX = `bbt-gd:${new URL(self.registration.scope).pathname}:`;
 const CACHE = `${PREFIX}${VERSION}`;
 const ASSETS = ['index.html', 'styles.css', 'app.js', 'core.js', 'db.js', 'drive.js', 'manifest.webmanifest', 'icon.svg', 'icon-192-v101.png', 'icon-512-v101.png', 'icon-maskable-512-v101.png', 'apple-touch-icon-v101.png'];
