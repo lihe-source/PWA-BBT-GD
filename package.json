@@ -1,0 +1,9 @@
+{
+  "name": "pwa-bbt-gd",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "溫序 BBT — GitHub Pages 女性體溫記錄 PWA",
+  "scripts": { "test": "node --test tests.mjs" },
+  "engines": { "node": ">=20" }
+}

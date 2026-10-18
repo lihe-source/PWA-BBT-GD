@@ -1,0 +1,17 @@
+{
+  "id": "./",
+  "name": "溫序 BBT｜體溫與週期記錄",
+  "short_name": "溫序 BBT",
+  "description": "記錄每日體溫、觀察週期，透過 Google Drive 同步與備份。",
+  "lang": "zh-Hant",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#19161f",
+  "theme_color": "#19161f",
+  "icons": [
+    { "src": "./icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "./icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
