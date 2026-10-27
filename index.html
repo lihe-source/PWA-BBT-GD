@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="theme-color" content="#fff8f3">
-  <meta name="description" content="溫序 BBT：離線記錄女性體溫、查看每日與每週曲線，透過 Google Drive 同步與備份。">
+  <meta name="description" content="溫序 BBT：離線記錄女性體溫、查看每日、每週與雙週曲線，透過 Google Drive 同步與備份。">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="溫序 BBT">
@@ -39,7 +39,7 @@
   <header class="app-header">
     <div class="header-inner">
       <a href="#chart" class="brand" aria-label="溫序 BBT 首頁"><img src="./icon.svg?v=1.0.1" alt="" width="38" height="38"><span><b>溫序 <small>BBT</small></b><span class="brand-sub">體溫與週期記錄</span></span></a>
-      <div class="header-actions"><button id="status-pill" class="status-pill" type="button" title="查看同步設定"><svg class="icon"><use href="#i-cloud"/></svg><span id="status-text">本機記錄</span></button><button class="version-pill" type="button" data-action="version">v1.0.2</button></div>
+      <div class="header-actions"><button id="status-pill" class="status-pill" type="button" title="查看同步設定"><svg class="icon"><use href="#i-cloud"/></svg><span id="status-text">本機記錄</span></button><button class="version-pill" type="button" data-action="version">v1.0.3</button></div>
     </div>
   </header>
 
@@ -49,14 +49,20 @@
 
     <section id="page-chart" class="page" aria-labelledby="chart-title">
       <div class="page-heading"><div><p class="eyebrow">留意每一天的細微變化</p><h1 id="chart-title">體溫曲線</h1></div><button class="button primary compact" type="button" data-action="new-record"><svg class="icon"><use href="#i-plus"/></svg>新增記錄</button></div>
-      <div class="card chart-card">
-        <div class="chart-toolbar"><div class="segmented" role="group" aria-label="圖表顯示模式"><button type="button" id="mode-day" data-mode="day" aria-pressed="true"><svg class="icon"><use href="#i-day"/></svg>日</button><button type="button" id="mode-week" data-mode="week" aria-pressed="false"><svg class="icon"><use href="#i-week"/></svg>週</button></div><label class="sr-only" for="chart-range">圖表日期範圍</label><select id="chart-range" class="range-select"><option value="30">最近 30 天</option><option value="month">本月</option><option value="cycle">本次週期</option><option value="custom">自訂日期</option></select></div>
-        <div id="custom-range" class="custom-range" hidden><label>開始日期<input type="date" id="range-start"></label><span>至</span><label>結束日期<input type="date" id="range-end"></label><button class="button secondary compact" type="button" id="apply-range">套用</button></div>
+      <div id="chart-home"><div class="card chart-card" id="chart-card">
+        <div class="chart-toolbar">
+          <div class="segmented" role="group" aria-label="圖表顯示模式"><button type="button" id="mode-day" data-mode="day" aria-pressed="true"><svg class="icon"><use href="#i-day"/></svg>日</button><button type="button" id="mode-week" data-mode="week" aria-pressed="false"><svg class="icon"><use href="#i-week"/></svg>週</button><button type="button" id="mode-biweek" data-mode="biweek" aria-pressed="false">雙週</button></div>
+          <div class="chart-range-actions"><label class="sr-only" for="chart-range">圖表日期範圍</label><select id="chart-range" class="range-select"><option value="14">近 14 天</option><option value="30" selected>近 30 天</option><option value="90">近 90 天</option><option value="180">近 180 天</option><option value="365">近 365 天</option><option value="month">本月</option><option value="cycle">本次週期</option><option value="custom">自訂日期</option></select><button type="button" class="button secondary compact" id="chart-expand" aria-haspopup="dialog"><svg class="icon" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="m8 3-3 3 3 3m8 6 3 3-3 3"/></svg>橫向檢視</button><button type="button" class="button secondary compact" id="chart-close" hidden>✕ 關閉</button></div>
+        </div>
+        <p class="rotate-help">請將裝置橫放；若未旋轉，請關閉直向鎖定。</p>
+        <details id="custom-range" class="range-editor" hidden><summary>自訂日期・變更起訖範圍</summary><div class="custom-range"><label>開始日期<input type="date" id="range-start"></label><span>至</span><label>結束日期<input type="date" id="range-end"></label><button class="button secondary compact" type="button" id="apply-range">套用</button></div></details>
+        <div class="chart-controls"><div class="chart-zoom" role="group" aria-label="圖表縮放"><button type="button" id="zoom-out" aria-label="縮小圖表">−</button><span id="zoom-label">1×</span><button type="button" id="zoom-in" aria-label="放大圖表">＋</button><button type="button" id="zoom-fit">符合畫面</button></div><label class="period-switch"><input type="checkbox" id="period-toggle" checked>經期著色</label><div class="chart-step" role="group" aria-label="選擇圖表資料"><button type="button" id="previous-point" aria-label="上一筆資料">‹</button><button type="button" id="next-point" aria-label="下一筆資料">›</button></div></div>
         <div id="selection-info" class="selection-info" aria-live="polite" aria-atomic="true"></div>
         <div class="chart-topline"><span id="range-caption"></span><span class="chart-unit">體溫 °C</span></div>
         <div id="temperature-chart" class="temperature-chart"></div>
-        <div class="chart-footer"><div class="legend"><span><i class="legend-dot"></i>每日主要量測</span><span><i class="legend-band"></i>月經期間</span><span><i class="legend-band estimate"></i>推估排卵區間</span></div><span class="scroll-hint">左右滑動・點日期查看</span></div>
-      </div>
+        <div class="chart-footer"><div class="legend"><span><i class="legend-dot"></i>每日主要量測</span><span><i class="legend-band"></i>月經期間</span><span><i class="legend-band estimate"></i>推估排卵區間</span></div><span class="scroll-hint" id="density-hint">點選資料查看詳情</span></div>
+        <details id="selection-details" class="chart-details" hidden><summary id="selection-details-title">查看區間實際量測</summary><div id="selection-rows" class="chart-detail-rows"></div></details>
+      </div></div>
       <div class="insight-grid"><article class="card insight"><div class="insight-icon"><svg class="icon"><use href="#i-day"/></svg></div><div><p class="muted small">週期與日期推估</p><div id="cycle-insight"></div></div></article><article class="card insight"><div class="insight-icon mint"><svg class="icon"><use href="#i-chart"/></svg></div><div><p class="muted small">基礎體溫趨勢</p><div id="trend-insight"></div></div></article></div>
       <p class="health-note"><svg class="icon"><use href="#i-info"/></svg><span>排卵日期為估算；體溫升高主要反映排卵後變化。此程式不能作為避孕或排卵確診依據。</span></p>
     </section>
@@ -101,11 +107,13 @@
       <article class="card settings-card"><div class="section-line"><h2>備份與還原</h2><button type="button" id="refresh-backups" class="text-button"><svg class="icon"><use href="#i-refresh"/></svg>重新整理</button></div><p class="muted small">預設顯示最新 5 份，依雲端建立時間排序。選取不會立即還原。</p><div id="backup-list" class="backup-list"></div><div class="button-row"><button type="button" id="restore-backup" class="button secondary">還原選定備份</button><button type="button" id="manual-backup" class="text-button">立即建立備份</button><button type="button" id="more-backups" class="text-button" hidden>較早備份</button></div><details id="safety-section" class="setup-help"><summary>本機安全備份 <span id="safety-count"></span></summary><div id="safety-list"></div></details></article>
       <article class="card settings-card"><div class="section-line"><h2>個人與週期設定</h2></div><form id="profile-form"><label>被記錄者名稱<input id="profile-name" maxlength="60" required placeholder="我的體溫"></label><div class="field-grid"><label>平常平均週期（天）<input id="cycle-length" type="number" inputmode="numeric" min="15" max="90" step="1" required></label><label>顯示／新增記錄時區<select id="time-zone"><option value="Asia/Taipei">台灣 UTC+8</option><option value="Asia/Tokyo">日本 UTC+9</option><option value="Asia/Manila">菲律賓 UTC+8</option><option value="Asia/Hong_Kong">香港 UTC+8</option><option value="America/Los_Angeles">美國洛杉磯</option><option value="America/New_York">美國紐約</option><option value="Europe/London">英國倫敦</option><option value="UTC">UTC</option></select></label></div><p class="field-help">既有量測保留原本輸入的日期、時間及時區，不因另一台裝置的位置而改日。</p><button type="submit" class="button secondary">儲存個人設定</button></form></article>
       <article class="card settings-card"><div class="section-line"><h2>外觀</h2><svg class="icon muted"><use href="#i-moon"/></svg></div><label class="setting-inline">介面主題<select id="theme-select"><option value="light">淺色（預設）</option><option value="dark">深色</option><option value="system">跟隨系統</option></select></label></article>
-      <article class="card settings-card" id="version-settings"><div class="section-line"><h2>版本與更新</h2><span class="soft-pill">自動更新已開啟</span></div><div class="version-grid"><div><span>當前版本</span><b id="current-version">1.0.2</b></div><div><span>最新版本</span><b id="latest-version">檢查中</b></div><div><span>最後檢查</span><b id="last-update-check">尚無</b></div></div><button type="button" id="check-update" class="button secondary"><svg class="icon"><use href="#i-refresh"/></svg>檢查更新</button><p id="update-status" class="field-help" role="status">啟動時自動檢查，有新版時先保存草稿再更新。</p></article>
+      <article class="card settings-card" id="version-settings"><div class="section-line"><h2>版本與更新</h2><span class="soft-pill">自動更新已開啟</span></div><div class="version-grid"><div><span>當前版本</span><b id="current-version">1.0.3</b></div><div><span>最新版本</span><b id="latest-version">檢查中</b></div><div><span>最後檢查</span><b id="last-update-check">尚無</b></div></div><button type="button" id="check-update" class="button secondary"><svg class="icon"><use href="#i-refresh"/></svg>檢查更新</button><p id="update-status" class="field-help" role="status">啟動時自動檢查，有新版時先保存草稿再更新。</p></article>
       <article class="card settings-card"><div class="section-line"><h2>資料匯出與匯入</h2></div><div class="button-row"><button type="button" id="export-json" class="button secondary compact"><svg class="icon"><use href="#i-download"/></svg>完整 JSON</button><button type="button" id="export-csv" class="button secondary compact">記錄 CSV</button><button type="button" id="import-json" class="text-button">匯入 JSON 備份</button></div><input type="file" id="import-file" accept=".json,application/json" hidden><p class="field-help">匯出不包含登入憑證或連線設定。健康資料會以 JSON 儲存；請妥善保管匯出檔與共用資料夾權限。</p></article>
-      <p class="settings-footnote">溫序 BBT · V1.0.2<br>記錄天數指有體溫記錄的不同日期；不包含中間漏記的天數。</p>
+      <p class="settings-footnote">溫序 BBT · V1.0.3<br>記錄天數指有體溫記錄的不同日期；不包含中間漏記的天數。</p>
     </section>
   </main>
+
+  <dialog id="chart-view" class="chart-view" aria-label="體溫曲線橫向檢視"><div id="chart-view-mount"></div></dialog>
 
   <nav class="bottom-nav" aria-label="主要導覽"><div class="nav-inner"><a href="#chart" data-page="chart" aria-current="page"><svg class="icon"><use href="#i-chart"/></svg><span>體溫曲線</span></a><a href="#records" data-page="records"><svg class="icon"><use href="#i-thermo"/></svg><span>體溫記錄</span></a><a href="#settings" data-page="settings"><svg class="icon"><use href="#i-settings"/></svg><span>設定</span></a></div></nav>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>

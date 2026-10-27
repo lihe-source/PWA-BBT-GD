@@ -1,3 +1,4 @@
+import * as Chart from './chart.js';
 /* Run: node --test tests.mjs. No packages, network, credentials, or real health data required. */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -307,10 +308,10 @@ async function appHarness() {
   };
   const document = { getElementById: element, querySelector: element, querySelectorAll: () => [], documentElement: { dataset: {} }, activeElement: null };
   const navigator = { onLine: true, serviceWorker: { controller: null, addEventListener: (name, fn) => handlers.set(name, fn), register: async () => ({ waiting: null }) } };
-  const context = { ...Core, ...DB, ...Cloud, h: Core.escapeHTML, URL, Date, Intl, Map, Set, Array, Object, Math, Number, String, JSON, Promise, console, crypto: globalThis.crypto, document, navigator, innerWidth: 390, isSecureContext: true, localStorage: { setItem() {}, getItem() { return null; } }, location: { reload: () => { reloads++; } }, setTimeout: (fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return t; }, clearTimeout, setInterval, clearInterval, AbortController, fetch, matchMedia: () => ({ matches: true, addEventListener() {} }) };
+  const context = { ...Core, ...DB, ...Cloud, ...Chart, h: Core.escapeHTML, URL, Date, Intl, Map, Set, Array, Object, Math, Number, String, JSON, Promise, console, crypto: globalThis.crypto, document, navigator, innerWidth: 390, isSecureContext: true, localStorage: { setItem() {}, getItem() { return null; } }, location: { reload: () => { reloads++; } }, setTimeout: (fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return t; }, clearTimeout, setInterval, clearInterval, AbortController, fetch, matchMedia: () => ({ matches: true, addEventListener() {} }) };
   let source = await readFile(new URL('./app.js', import.meta.url), 'utf8');
   source = source.replace(/^import .+;\n/gm, '').replaceAll('import.meta.url', JSON.stringify(new URL('./app.js', import.meta.url).href)).replace(/\ninit\(\);\s*$/, '\n');
-  source += '\nglobalThis.__app = { S, kv, repo, auth, disconnectGoogle, renderSettings, renderChart, setupServiceWorker, connectionValues, captureForms };';
+  source += '\nglobalThis.__app = { S, kv, repo, auth, disconnectGoogle, renderSettings, renderChart, setupServiceWorker, connectionValues, captureForms, chartBounds, stepChart };';
   vm.runInNewContext(source, context); context.__app.kv.set = async () => {};
   return { app: context.__app, element, handlers, get reloads() { return reloads; } };
 }
@@ -415,4 +416,86 @@ test('logout during upload preserves the pending event and its reserved remote f
   await assert.rejects(running, error => error.reason === 'logout');
   const saved = await a.repo.read('device', D); assert.deepEqual(saved.outbox, [operation]); assert.equal(saved.uploads[operation], 'reserved-id');
   assert.equal(project(saved.events).records.length, 1);
+});
+
+test('fortnight groups keep a permanent Monday anchor across filters and year boundaries', () => {
+  const view = recordsView([record('2026-12-29', 360), record('2027-01-03', 370)]);
+  const full = Core.biweeklySeries(view, '2026-12-20', '2027-01-20');
+  const filtered = Core.biweeklySeries(view, '2026-12-29', '2027-01-03');
+  for (const group of filtered) { assert.equal(new Date(`${group.date}T00:00Z`).getUTCDay(), 1); assert.equal(daysBetween(group.date, group.end), 13); assert.ok(full.some(g => g.date === group.date)); }
+  assert.equal(filtered.reduce((n, g) => n + g.totalDays, 0), 6);
+});
+test('partial weekly and fortnightly ranges average only selected daily primary readings', () => {
+  const view = recordsView([record('2026-10-05', 400), record('2026-10-06', 360), record('2026-10-07', 365), record('2026-10-07', 390, { time: '15:00', basal: false }), record('2026-10-08', 366)]);
+  for (const span of [7, 14]) {
+    const groups = Core.groupedSeries(view, '2026-10-06', '2026-10-08', span);
+    assert.equal(groups.length, 1); assert.equal(groups[0].totalDays, 3); assert.equal(groups[0].partial, true);
+    assert.equal(groups[0].count, 3); assert.equal(groups[0].temp10, (360 + 365 + 366) / 3);
+    assert.equal(Core.tempText(groups[0].temp10), '36.4');
+  }
+});
+test('empty fortnight retains a gap and a single-day partial range has a one-day denominator', () => {
+  assert.ok(Core.biweeklySeries(project([]), '2026-09-01', '2026-10-31').every(g => g.temp10 === null));
+  const g = Core.biweeklySeries(recordsView([record('2026-10-08')]), '2026-10-08', '2026-10-08')[0];
+  assert.equal(g.totalDays, 1); assert.equal(g.count, 1); assert.equal(g.temp10, 365);
+});
+test('menstrual intervals clip, merge overlaps, exclude conflicts and mark missing end dates', () => {
+  const view = { periods: [{ start: '2026-09-29', end: '2026-10-03' }, { start: '2026-10-02', end: '2026-10-05' }, { start: '2026-10-10', end: '', conflict: false }, { start: '2026-10-06', end: '2026-10-09', conflict: true }] };
+  assert.deepEqual(Core.periodIntervals(view, '2026-10-01', '2026-10-31', '2026-10-12'), [{ start: '2026-10-01', end: '2026-10-05', unfinished: false }, { start: '2026-10-10', end: '2026-10-12', unfinished: true }]);
+  assert.deepEqual(Core.periodIntervals(view, '2026-11-01', '2026-11-05', '2026-10-12'), []);
+});
+test('period bands use actual day widths regardless of aggregation and include both boundary days', () => {
+  for (const series of [dailySeries(project([]), '2026-10-01', '2026-10-31'), weeklySeries(project([]), '2026-10-01', '2026-10-31'), Core.biweeklySeries(project([]), '2026-10-01', '2026-10-31')]) {
+    const layout = Chart.chartLayout(series, '2026-10-01', '2026-10-31', 700);
+    const b = layout.band('2026-10-08', '2026-10-12');
+    assert.equal(b.x, layout.left + 7 * layout.unit); assert.equal(b.width, 5 * layout.unit);
+    assert.equal(layout.y(350), layout.bottom); assert.equal(layout.y(400), layout.top);
+  }
+});
+test('dense point labels hide and recover when zoom gives enough space', () => {
+  const series = dailySeries(project([]), '2026-01-01', '2026-12-31');
+  const fit = Chart.chartLayout(series, '2026-01-01', '2026-12-31', 320);
+  const zoom = Chart.chartLayout(series, '2026-01-01', '2026-12-31', 320, 320, 128);
+  assert.equal(fit.showValues, false); assert.ok(fit.labelEvery > 1); assert.equal(zoom.showValues, true);
+  assert.ok(zoom.width > fit.width); assert.equal(zoom.positions.length, 365);
+});
+test('weekly and fortnightly templates retain menstrual shading even without temperatures', async () => {
+  for (const mode of ['week', 'biweek']) {
+    const ui = await appHarness(); ui.app.S.view = project([]); ui.app.S.view.periods = [{ start: '2026-10-08', end: '2026-10-12' }];
+    ui.app.S.prefs = { mode, range: 'custom', start: '2026-10-01', end: '2026-10-31' };
+    ui.app.renderChart(); const chart = ui.element('temperature-chart').innerHTML;
+    assert.match(chart, /class="period-band"/); assert.match(chart, /class="period-strip"/); assert.match(chart, /2026-10-08 至 2026-10-12/);
+    ui.app.S.prefs.showPeriods = false; ui.app.renderChart(); assert.doesNotMatch(ui.element('temperature-chart').innerHTML, /class="period-band"/);
+  }
+});
+test('aggregate details retain actual measurement times and one-day partial count', async () => {
+  const ui = await appHarness(); ui.app.S.view = recordsView([record('2026-10-08', 364, { time: '06:35' }), record('2026-10-08', 370, { time: '15:20', basal: false })]);
+  ui.app.S.prefs = { mode: 'biweek', range: 'custom', start: '2026-10-08', end: '2026-10-08' }; ui.app.renderChart();
+  assert.match(ui.element('selection-info').innerHTML, /雙週平均/); assert.match(ui.element('selection-info').innerHTML, /1／1/); assert.match(ui.element('selection-info').innerHTML, /部分區間/);
+  assert.doesNotMatch(ui.element('selection-info').innerHTML, /06:35|15:20/);
+  assert.match(ui.element('selection-rows').innerHTML, /06:35/); assert.match(ui.element('selection-rows').innerHTML, /15:20/);
+});
+test('dense chart retains every date hit target and selection can advance precisely', async () => {
+  const ui = await appHarness(); ui.app.S.view = recordsView(Array.from({ length: 90 }, (_, i) => record(addDays('2026-07-01', i), 360 + i % 10)));
+  ui.app.S.prefs = { mode: 'day', range: 'custom', start: '2026-07-01', end: '2026-09-28' }; ui.app.S.selection = '2026-07-01'; ui.app.renderChart();
+  const chart = ui.element('temperature-chart').innerHTML;
+  assert.equal((chart.match(/data-chart-index=/g) || []).length, 90); assert.equal((chart.match(/class="point-value"/g) || []).length, 1);
+  ui.app.stepChart(1); assert.equal(ui.app.S.selection, '2026-07-02'); assert.match(ui.element('selection-info').innerHTML, /07:10/);
+});
+test('all quick ranges include today and have the requested number of days', async () => {
+  const ui = await appHarness();
+  for (const n of [14, 30, 90, 180, 365]) { ui.app.S.prefs.range = String(n); const b = ui.app.chartBounds(); assert.equal(daysBetween(b.start, b.end) + 1, n); }
+});
+
+test('rotation redraw preserves unsaved custom date input until the user applies it', async () => {
+  const ui = await appHarness(); ui.app.S.prefs = { mode: 'day', range: 'custom', start: '2026-10-01', end: '2026-10-27' };
+  ui.app.renderChart(); ui.app.S.rangeEditing = true; ui.element('range-start').value = '2026-09-01'; ui.element('range-end').value = '2026-10-25';
+  ui.app.renderChart(); assert.equal(ui.element('range-start').value, '2026-09-01'); assert.equal(ui.element('range-end').value, '2026-10-25');
+  assert.equal(ui.app.S.prefs.start, '2026-10-01');
+});
+test('rotation changes chart geometry without changing data or selected bounds', () => {
+  const view = recordsView([record('2026-10-08')]), series = Core.biweeklySeries(view, '2026-09-01', '2026-10-27');
+  const portrait = Chart.chartLayout(series, '2026-09-01', '2026-10-27', 320, 500), landscape = Chart.chartLayout(series, '2026-09-01', '2026-10-27', 800, 173);
+  assert.equal(portrait.positions.length, landscape.positions.length); assert.ok(landscape.positions.at(-1) > portrait.positions.at(-1)); assert.ok(landscape.bottom < portrait.bottom);
+  assert.equal(series[0].start, '2026-09-01'); assert.equal(series.at(-1).displayEnd, '2026-10-27');
 });

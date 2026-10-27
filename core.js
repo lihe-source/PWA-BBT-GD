@@ -1,6 +1,6 @@
 /* 溫序 BBT — domain logic, independent of the browser. */
 export const APP = 'bbt-gd';
-export const VERSION = '1.0.2';
+export const VERSION = '1.0.3';
 export const SCHEMA = 1;
 export const CONDITIONS = ['發燒', '睡眠不足', '飲酒', '量測時間不同', '其他干擾'];
 export const DEFAULT_PROFILE = { name: '我的體溫', cycleLength: 28, timeZone: 'Asia/Taipei' };
@@ -193,15 +193,38 @@ export function dailySeries(view, start, end) {
   return datesBetween(start, end).map(date => ({ date, record: daily.get(date) || null, temp10: daily.get(date)?.temp10 ?? null }));
 }
 export function weeklySeries(view, start, end) {
+  return groupedSeries(view, start, end, 7);
+}
+export function biweeklySeries(view, start, end) {
+  return groupedSeries(view, start, end, 14);
+}
+export function groupedSeries(view, start, end, span = 7) {
+  if (![7, 14].includes(span)) throw new Error('不支援的彙整天數');
   const days = dailySeries(view, start, end);
   const groups = new Map();
   for (const day of days) {
-    const week = weekStart(day.date);
-    if (!groups.has(week)) groups.set(week, { date: week, end: addDays(week, 6), values: [], records: [], count: 0, temp10: null });
+    // One permanent Monday anchor: changing the filter never shifts a fortnight.
+    const week = span === 7 ? weekStart(day.date) : addDays('1970-01-05', Math.floor(daysBetween('1970-01-05', day.date) / 14) * 14);
+    if (!groups.has(week)) {
+      const finish = addDays(week, span - 1), from = week < start ? start : week, to = finish > end ? end : finish;
+      groups.set(week, { date: week, end: finish, start: from, displayEnd: to, totalDays: daysBetween(from, to) + 1, partial: from !== week || to !== finish, values: [], records: [], count: 0, temp10: null });
+    }
     const group = groups.get(week);
     if (day.record) { group.values.push(day.record.temp10); group.records.push(day.record); group.count++; }
   }
   return [...groups.values()].map(g => ({ ...g, temp10: g.count ? g.values.reduce((a, b) => a + b, 0) / g.count : null }));
+}
+export function periodIntervals(view, start, end, now) {
+  const clipped = view.periods.filter(p => !p.conflict && p.start <= end && (p.end || now) >= start)
+    .map(p => ({ start: p.start < start ? start : p.start, end: (p.end || now) > end ? end : (p.end || now), unfinished: !p.end }))
+    .filter(p => p.start <= p.end).sort((a, b) => a.start.localeCompare(b.start));
+  const merged = [];
+  for (const p of clipped) {
+    const last = merged.at(-1);
+    if (last && daysBetween(last.end, p.start) <= 1) { if (p.end > last.end) last.end = p.end; last.unfinished ||= p.unfinished; }
+    else merged.push({ ...p });
+  }
+  return merged;
 }
 export function statistics(view) {
   const days = [...new Set(view.records.map(r => r.date))].sort();
