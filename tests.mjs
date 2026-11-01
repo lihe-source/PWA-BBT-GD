@@ -12,6 +12,8 @@ import { APP, VERSION, clone, stable, validDate, addDays, daysBetween, datesBetw
 import { Repository, MemoryKV } from './db.js';
 import { Drive, DriveError, SyncEngine, folderId, backupFiles } from './drive.js';
 if (!globalThis.crypto) globalThis.crypto = webcrypto;
+const lhRecord = (date = '2026-10-12', ratio100 = 65, time = '18:30') => ({date, time, ratio100, notes: '', timeZone: 'Asia/Taipei'});
+const lhView = rows => project([buildChange([], D, 'test', rows.map((value,i)=>({type:'lh',id:`lh-${i}`,value})))]);
 const D = 'drive:folder123456789';
 const record = (date = '2026-10-18', temp10 = 365, extra = {}) => ({ date, time: '07:10', temp10, basal: true, conditions: [], notes: '', timeZone: 'Asia/Taipei', ...extra });
 const change = (events, id, value, options = {}) => buildChange(events, D, options.actor || 'test@example.invalid', [{ type: 'record', id, value, ...(options.parents ? { parents: options.parents } : {}) }], [], options);
@@ -498,4 +500,84 @@ test('rotation changes chart geometry without changing data or selected bounds',
   const portrait = Chart.chartLayout(series, '2026-09-01', '2026-10-27', 320, 500), landscape = Chart.chartLayout(series, '2026-09-01', '2026-10-27', 800, 173);
   assert.equal(portrait.positions.length, landscape.positions.length); assert.ok(landscape.positions.at(-1) > portrait.positions.at(-1)); assert.ok(landscape.bottom < portrait.bottom);
   assert.equal(series[0].start, '2026-09-01'); assert.equal(series.at(-1).displayEnd, '2026-10-27');
+});
+
+test('LH input accepts endpoints and two decimals, rejects out-of-range and excess precision', () => {
+  assert.equal(Core.parseRatio('0.00'),0); assert.equal(Core.parseRatio('1.00'),100); assert.equal(Core.parseRatio('0.67'),67);
+  assert.equal(Core.ratioText(0),'0.00'); assert.equal(Core.ratioText(100),'1.00');
+  for (const value of ['', '-0.1', '1.01', '0.001', 'NaN', '1e-1']) assert.throws(()=>Core.parseRatio(value));
+});
+test('LH entity validation protects imported data and accepts legacy temperature-only backups', () => {
+  for(const ratio100 of [-1,101,0.5,'65',null]) assert.throws(()=>lhView([lhRecord('2026-10-12',ratio100)]));
+  const old=snapshot([change([],'old',record())],D); delete old.stats.lhRecords;
+  assert.doesNotThrow(()=>validateSnapshot(old)); assert.equal(project([change([],'old',record())]).lhRecords.length,0);
+});
+test('daily LH chooses maximum with latest time on a tie and preserves every reading', () => {
+  const view=lhView([lhRecord('2026-10-12',20,'08:00'),lhRecord('2026-10-12',80,'14:00'),lhRecord('2026-10-12',80,'20:00')]);
+  const result=Core.lhForPoint(view,{date:'2026-10-12'});
+  assert.equal(result.value,80); assert.equal(result.record.time,'20:00'); assert.equal(result.rows.length,3); assert.equal(result.count,1);
+});
+test('weekly and fortnightly LH means weight recorded daily maxima once and clip to selected dates', () => {
+  const view=lhView([lhRecord('2026-10-12',10,'08:00'),lhRecord('2026-10-12',90),lhRecord('2026-10-14',30),lhRecord('2026-10-15',100)]);
+  for(const series of [weeklySeries,Core.biweeklySeries]) {
+    const p=series(view,'2026-10-12','2026-10-14')[0], result=Core.lhForPoint(view,p);
+    assert.equal(result.value,60); assert.equal(result.count,2); assert.equal(result.rows.length,3); assert.equal(result.record,null);
+  }
+});
+test('missing LH is a gap, zero is a valid observation, unresolved conflicts are excluded', () => {
+  const base=buildChange([],D,'A',[{type:'lh',id:'x',value:lhRecord()}]);
+  const a=buildChange([base],D,'A',[{type:'lh',id:'x',value:lhRecord('2026-10-12',50)}]);
+  const b=buildChange([base],D,'B',[{type:'lh',id:'x',value:lhRecord('2026-10-12',90)}]);
+  assert.equal(Core.lhForPoint(project([base,a,b]),{date:'2026-10-12'}).value,null);
+  const view=lhView([lhRecord('2026-10-12',0)]);
+  assert.equal(Core.lhForPoint(view,{date:'2026-10-12'}).value,0);
+  assert.equal(Core.lhForPoint(view,{date:'2026-10-13'}).value,null);
+});
+test('LH counts, snapshots, deletion, restoration and CSV preserve values and actual times', () => {
+  const base=buildChange([],D,'A',[{type:'lh',id:'x',value:lhRecord('2026-10-12',0)}]);
+  const saved=snapshot([base],D); validateSnapshot(saved,D);
+  assert.equal(saved.stats.days,1); assert.equal(saved.stats.records,0); assert.equal(saved.stats.lhRecords,1);
+  const deleted=buildChange([base],D,'A',[{type:'lh',id:'x',value:null}]);
+  assert.equal(project([base,deleted]).lhRecords.length,0);
+  const restore=buildRestore([base,deleted],D,'A',saved.state);
+  const view=project([base,deleted,restore]); assert.equal(view.lhRecords[0].ratio100,0);
+  assert.match(csv(view),/排卵試紙數值/); assert.match(csv(view),/18:30/); assert.match(csv(view),/0\.00/);
+});
+test('LH synchronizes across two devices and is included in cloud backup metadata and contents', async () => {
+  const drive=new FakeDrive(),a=device(drive),b=device(drive);
+  await a.repo.change('device',D,'A',[{type:'lh',id:'a',value:lhRecord()}]);
+  await b.repo.change('device',D,'B',[{type:'lh',id:'b',value:lhRecord('2026-10-13',100)}]);
+  await a.sync.sync(); await b.sync.sync(); await a.sync.sync();
+  assert.equal((await a.repo.view('device',D)).lhRecords.length,2);
+  assert.equal((await b.repo.view('device',D)).lhRecords.length,2);
+  const latest=backupFiles(await drive.list())[0]; assert.equal(latest.properties.bbtLH,'2');
+  const saved=await a.sync.readBackup(latest.id); assert.equal(saved.stats.lhRecords,2); assert.equal(saved.stats.days,2);
+});
+test('LH-only charts show right scale, plotted zero and selected actual time without an empty overlay', async () => {
+  const ui=await appHarness(); ui.app.S.view=lhView([lhRecord('2026-10-12',0)]);
+  ui.app.S.prefs={mode:'day',range:'custom',start:'2026-10-12',end:'2026-10-12'}; ui.app.renderChart();
+  const chart=ui.element('temperature-chart').innerHTML;
+  assert.match(chart,/lh-axis/); assert.match(chart,/1\.00/); assert.match(chart,/lh-point/); assert.doesNotMatch(chart,/chart-empty-overlay/);
+  assert.match(ui.element('lh-selection').innerHTML,/0\.00/); assert.match(ui.element('lh-selection').innerHTML,/18:30/);
+});
+test('grouped LH selection preserves measurement details and menstrual shading', async () => {
+  for(const mode of ['week','biweek']) {
+    const ui=await appHarness(); ui.app.S.view=lhView([lhRecord('2026-10-12',65,'09:15'),lhRecord('2026-10-13',85,'18:30')]);
+    ui.app.S.view.periods=[{start:'2026-10-12',end:'2026-10-13'}];
+    ui.app.S.prefs={mode,range:'custom',start:'2026-10-12',end:'2026-10-13'}; ui.app.renderChart();
+    assert.match(ui.element('lh-selection').innerHTML,/0\.75/); assert.doesNotMatch(ui.element('lh-selection').innerHTML,/09:15/);
+    assert.match(ui.element('lh-chart-rows').innerHTML,/09:15/); assert.match(ui.element('lh-chart-rows').innerHTML,/18:30/);
+    assert.match(ui.element('temperature-chart').innerHTML,/period-band/);
+  }
+});
+test('dense LH charts hide nonselected labels while keeping all date targets', async () => {
+  const ui=await appHarness(); ui.app.S.view=lhView(Array.from({length:90},(_,i)=>lhRecord(addDays('2026-07-01',i),i)));
+  ui.app.S.prefs={mode:'day',range:'custom',start:'2026-07-01',end:'2026-09-28'}; ui.app.S.selection='2026-07-01'; ui.app.renderChart();
+  const chart=ui.element('temperature-chart').innerHTML;
+  assert.equal((chart.match(/class="lh-label"/g)||[]).length,1); assert.equal((chart.match(/data-chart-index=/g)||[]).length,90);
+  ui.app.stepChart(1); assert.match(ui.element('lh-selection').innerHTML,/0\.01/);
+});
+test('LH draft preserves a zero input, independent date, time and notes', async () => {
+  const ui=await appHarness(); ui.element('lh-value').value='0.00'; ui.element('lh-date').value='2026-10-12'; ui.element('lh-time').value='21:35'; ui.element('lh-notes').value='晚間';
+  const draft=ui.app.captureForms(); assert.equal(draft.lh.value,'0.00'); assert.equal(draft.lh.time,'21:35'); assert.equal(draft.lh.notes,'晚間');
 });

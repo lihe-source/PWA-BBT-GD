@@ -1,4 +1,4 @@
-import { APP, VERSION, DEFAULT_PROFILE, CONDITIONS, clone, uuid, stable, escapeHTML as h, addDays, daysBetween, validDate, localNow, formatStamp, tempText, parseTemperature, entityKey, project, currentState, dailyValues, dailySeries, weeklySeries, biweeklySeries, periodIntervals, statistics, predict, snapshot, validateSnapshot, snapshotDiff, csv } from './core.js';
+import { APP, VERSION, DEFAULT_PROFILE, CONDITIONS, clone, uuid, stable, escapeHTML as h, addDays, daysBetween, validDate, localNow, formatStamp, tempText, parseTemperature, parseRatio, ratioText, lhForPoint, entityKey, project, currentState, dailyValues, dailySeries, weeklySeries, biweeklySeries, periodIntervals, statistics, predict, snapshot, validateSnapshot, snapshotDiff, csv } from './core.js';
 import { chartLayout } from './chart.js';
 import { IndexedKV, Repository } from './db.js';
 import { GoogleAuth, Drive, SyncEngine, folderId, loadGoogle, backupFiles } from './drive.js';
@@ -10,7 +10,7 @@ const PREFIX = `${APP}:${BASE.pathname}`;
 const kv = new IndexedKV(PREFIX);
 const repo = new Repository(kv);
 const auth = new GoogleAuth();
-const S = { key: 'local', dataset: 'local', meta: null, ws: null, view: project([]), prefs: { theme: 'light', mode: 'day', range: '30' }, config: {}, engine: null, syncState: '', page: 'chart', editor: 'temperature', historyLimit: 40, backupLimit: 5, selectedBackup: '', series: [], selection: '', scrollToSelection: true, recordContext: null, periodContext: null, dirty: { record: false, period: false, profile: false, cloud: false }, saving: false, syncing: false, ready: false, selectedTheme: 'light' };
+const S = { key: 'local', dataset: 'local', meta: null, ws: null, view: project([]), prefs: { theme: 'light', mode: 'day', range: '30' }, config: {}, engine: null, syncState: '', page: 'chart', editor: 'temperature', historyLimit: 40, backupLimit: 5, selectedBackup: '', series: [], selection: '', scrollToSelection: true, recordContext: null, periodContext: null, dirty: { record: false, period: false, profile: false, cloud: false, lh: false }, saving: false, syncing: false, ready: false, selectedTheme: 'light' };
 let toastTimer, syncTimer, draftTimer, activationTimer, modalResolve, updateBusy = false, reloadInProgress = false, swRegistration = null;
 let currentUpdate = null, profileContext = null;
 const channel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel(PREFIX) : null;
@@ -48,7 +48,7 @@ async function confirmAction(title, html, label = '確認', danger = false) {
 }
 
 function captureForms() {
-  return { at: Date.now(), dirty: S.dirty, recordContext: S.recordContext, periodContext: S.periodContext, profileContext,
+  return { at: Date.now(), dirty: S.dirty, recordContext: S.recordContext, periodContext: S.periodContext, lhContext: S.lhContext, lh: { date: $('lh-date').value, time: $('lh-time').value, value: $('lh-value').value, notes: $('lh-notes').value }, profileContext,
     record: { date: $('record-date').value, time: $('record-time').value, temperature: $('record-temperature').value, basal: $('record-basal').checked, primary: $('record-primary').checked, conditions: [...document.querySelectorAll('[name=condition]:checked')].map(e => e.value), notes: $('record-notes').value },
     period: { start: $('period-start').value, end: $('period-end').value },
     profile: { name: $('profile-name').value, cycleLength: $('cycle-length').value, timeZone: $('time-zone').value },
@@ -61,8 +61,8 @@ function markDirty(type) { S.dirty[type] = true; emergencyDraft(); clearTimeout(
 async function loadDraft() {
   let saved = await kv.get(`draft:${S.key}`);
   try { const emergency = JSON.parse(localStorage.getItem(`${PREFIX}:draft:${S.key}`) || 'null'); if (emergency && (!saved || emergency.at > saved.at)) saved = emergency; } catch { /* invalid draft does not affect records */ }
-  S.dirty = { record: false, period: false, profile: false, cloud: false };
-  resetRecord(false); resetPeriod(false); populateProfile(true); populateCloud();
+  S.dirty = { record: false, period: false, profile: false, cloud: false, lh: false };
+  resetRecord(false); resetPeriod(false); resetLH(false); populateProfile(true); populateCloud();
   if (!saved) return;
   S.dirty = { ...S.dirty, ...saved.dirty };
   if (S.dirty.record && saved.record) {
@@ -74,6 +74,7 @@ async function loadDraft() {
     updateRecordTitle();
     if (r.notes || r.conditions?.length) $('record-form').querySelector('details').open = true;
   }
+  if (S.dirty.lh && saved.lh) { $('lh-date').value=saved.lh.date; $('lh-time').value=saved.lh.time; $('lh-value').value=saved.lh.value; $('lh-notes').value=saved.lh.notes || ''; S.lhContext=saved.lhContext || S.lhContext; $('lh-title').textContent=S.lhContext?.id ? '編輯排卵試紙' : '新增排卵試紙'; }
   if (S.dirty.period && saved.period) { $('period-start').value = saved.period.start || ''; $('period-end').value = saved.period.end || ''; S.periodContext = saved.periodContext || S.periodContext; $('period-form-title').textContent = S.periodContext?.id ? '編輯月經記錄' : '月經記錄'; }
   if (S.dirty.profile && saved.profile) { $('profile-name').value = saved.profile.name || ''; $('cycle-length').value = saved.profile.cycleLength || ''; ensureZone(saved.profile.timeZone); $('time-zone').value = saved.profile.timeZone; profileContext = saved.profileContext || profileContext; }
   if (S.dirty.cloud && saved.cloud) { $('client-id').value = saved.cloud.clientId || ''; $('folder-input').value = saved.cloud.folder || ''; }
@@ -97,7 +98,7 @@ function populateProfile(force = false) {
   profileContext = { parents: S.view.entities.get('profile:main')?.heads.map(e => e.rev) || [], barrier: S.view.barrier };
 }
 function populateCloud() { $('client-id').value = S.config.clientId || ''; $('folder-input').value = S.config.folderId ? `https://drive.google.com/drive/folders/${S.config.folderId}` : ''; }
-function setEditor(value) { S.editor = value; $('record-form').hidden = value !== 'temperature'; $('period-form').hidden = value !== 'period'; document.querySelectorAll('[data-editor]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.editor === value))); }
+function setEditor(value) { $('lh-panel').hidden = value !== 'lh'; S.editor = value; $('record-form').hidden = value !== 'temperature'; $('period-form').hidden = value !== 'period'; document.querySelectorAll('[data-editor]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.editor === value))); }
 function navigate(page) {
   if (!['chart', 'records', 'settings'].includes(page)) page = 'chart';
   if (S.wideChart && page !== 'chart') closeChartView();
@@ -116,7 +117,7 @@ async function refresh({ notify = false } = {}) {
   renderAll();
   if (notify) broadcast();
 }
-function renderAll() { renderChart(); renderHistory(); renderPeriods(); renderSettings(); renderConflictsBanner(); renderStatus(); populateProfile(); }
+function renderAll() { renderChart(); renderHistory(); renderPeriods(); renderLH(); renderSettings(); renderConflictsBanner(); renderStatus(); populateProfile(); }
 
 function chartBounds() {
   const now = today(); let start, end = now;
@@ -143,7 +144,7 @@ function renderChart() {
   $('period-toggle').checked = S.prefs.showPeriods !== false;
   renderSelection();
   const chart = $('temperature-chart'), oldScroll = chart.querySelector('.chart-scroll')?.scrollLeft || 0;
-  const viewportWidth = chart.clientWidth > 50 ? chart.clientWidth - 37 : Math.max(240, innerWidth - 90);
+  const viewportWidth = chart.clientWidth > 50 ? chart.clientWidth - 83 : Math.max(240, innerWidth - 90);
   const height = chart.clientHeight >= 150 ? chart.clientHeight : 320;
   const layout = chartLayout(series, start, end, viewportWidth, height, S.prefs.chartZoom || 1);
   const { width, positions, y, top, bottom, showValues, labelEvery } = layout;
@@ -173,7 +174,8 @@ function renderChart() {
     }
     const from = p.start || p.date, to = p.displayEnd || p.date;
     const dateLabel = prettyDate(from, false), label2 = grouped ? `— ${prettyDate(to, false)}` : ['日', '一', '二', '三', '四', '五', '六'][new Date(`${p.date}T00:00:00Z`).getUTCDay()];
-    const aria = grouped ? `${from}至${to}，${p.temp10 === null ? '沒有記錄' : `平均${tempText(p.temp10)}攝氏，已記錄${p.count}天`}` : `${p.date}，${p.record ? `${p.record.time}，${tempText(p.temp10)}攝氏` : '沒有體溫記錄'}`;
+    const lhAria = lhForPoint(S.view, p);
+    const aria = (grouped ? `${from}至${to}，${p.temp10 === null ? '沒有記錄' : `平均${tempText(p.temp10)}攝氏，已記錄${p.count}天`}` : `${p.date}，${p.record ? `${p.record.time}，${tempText(p.temp10)}攝氏` : '沒有體溫記錄'}`) + `，試紙${ratioText(lhAria.value)}${lhAria.record ? `，${lhAria.record.time}` : ''}`;
     const left = i ? (positions[i - 1] + px) / 2 : 0, right = i < series.length - 1 ? (px + positions[i + 1]) / 2 : width;
     const labelClass = `chart-date${selected ? ' selected' : ''}${from === today() ? ' today' : ''}`;
     hits += `<g role="button" tabindex="${selected ? 0 : -1}" data-chart-index="${i}" aria-label="${h(aria)}" aria-pressed="${selected}"><rect x="${left}" y="0" width="${right - left}" height="${height}" class="chart-hit"/>${i % labelEvery === 0 ? `<text x="${px}" y="${bottom + 28}" class="${labelClass}">${dateLabel}</text><text x="${px}" y="${bottom + 45}" class="${labelClass}">${label2}</text>` : ''}</g>`;
@@ -181,8 +183,12 @@ function renderChart() {
   if (segment.length) segments.push(segment);
   const paths = segments.map(points => `<path class="chart-path" d="${points.map(([a, b], i) => `${i ? 'L' : 'M'}${a.toFixed(2)},${b.toFixed(2)}`).join(' ')}"/>`).join('');
   const selectedLine = selectedIndex >= 0 ? `<line x1="${positions[selectedIndex]}" x2="${positions[selectedIndex]}" y1="${top}" y2="${bottom + 11}" class="selected-line"/>` : '';
-  const hasValues = series.some(p => p.temp10 !== null);
-  chart.innerHTML = `<svg class="chart-axis" style="height:${height}px" viewBox="0 0 37 ${height}" aria-hidden="true">${axis}</svg><div class="chart-scroll" aria-label="體溫圖表，可左右捲動"><svg width="${width}" height="${height}" style="height:${height}px" viewBox="0 0 ${width} ${height}" role="group" aria-label="${mode === 'biweek' ? '雙週平均' : grouped ? '每週平均' : '每日'}體溫折線圖，縱軸35至40攝氏">${bands}${lines}${selectedLine}${paths}${dots}${hits}</svg></div>${!hasValues ? `<div class="chart-empty-overlay"><strong>這段日期尚無體溫資料</strong><span>已記錄的經期仍會顯示於背景與下緣色帶</span><button class="button secondary compact" type="button" data-action="new-record">${icon('plus')}記錄體溫</button></div>` : ''}`;
+  let lhPath='', lhDots='', lhSegment=[];
+  const flushLH=()=>{ if(lhSegment.length) lhPath+=`<path class="lh-path" d="${lhSegment.map(([x,y],i)=>`${i?'L':'M'}${x},${y}`).join(' ')}"/>`;lhSegment=[]; };
+  series.forEach((p,i)=>{const lh=lhForPoint(S.view,p); if(lh.value===null){flushLH();return;} const px=positions[i],py=bottom-lh.value/100*(bottom-top);lhSegment.push([px,py]);lhDots+=`<rect class="lh-point" x="${px-3}" y="${py-3}" width="6" height="6"/>`;if(showValues || p.date===S.selection) lhDots+=`<text class="lh-label" x="${px}" y="${py+16}">${ratioText(lh.value)}</text>`;});flushLH();
+  let rightAxis='';for(let n=100;n>=0;n-=20) rightAxis+=`<text x="5" y="${bottom-n/100*(bottom-top)}">${ratioText(n)}</text>`;
+  const hasValues = series.some(p => p.temp10 !== null || lhForPoint(S.view,p).value!==null);
+  chart.innerHTML = `<svg class="chart-axis" style="height:${height}px" viewBox="0 0 37 ${height}" aria-hidden="true">${axis}</svg><div class="chart-scroll" aria-label="體溫與試紙圖表，可左右捲動"><svg width="${width}" height="${height}" style="height:${height}px" viewBox="0 0 ${width} ${height}" role="group" aria-label="${mode === 'biweek' ? '雙週平均' : grouped ? '每週平均' : '每日'}體溫與試紙折線圖，左縱軸35至40攝氏，右縱軸試紙0.00至1.00">${bands}${lines}${selectedLine}${paths}${lhPath}${dots}${lhDots}${hits}</svg></div><svg class="chart-axis lh-axis" style="height:${height}px" viewBox="0 0 46 ${height}" aria-label="右軸：排卵試紙數值 0.00 至 1.00">${rightAxis}</svg>${!hasValues ? `<div class="chart-empty-overlay"><strong>這段日期尚無體溫或試紙資料</strong><span>已記錄的經期仍會顯示於背景與下緣色帶</span><button class="button secondary compact" type="button" data-action="new-record">${icon('plus')}記錄體溫</button></div>` : ''}`;
   const scroll = chart.querySelector('.chart-scroll');
   if (S.scrollToSelection && selectedIndex >= 0) { scroll.scrollLeft = Math.max(0, positions[selectedIndex] - viewportWidth * .65); S.scrollToSelection = false; } else scroll.scrollLeft = oldScroll;
   $('density-hint').textContent = showValues ? '點日期或資料點查看詳情' : '資料較密集，點選後顯示數值；可放大查看';
@@ -200,6 +206,10 @@ function renderSelection() {
   const date = grouped ? `${prettyDate(from)} — ${prettyDate(to)}` : prettyDate(point.date);
   const detail = (grouped ? `${S.prefs.mode === 'biweek' ? '雙週平均' : '當週平均'} · 已記錄 ${point.count}／${point.totalDays} 天${point.partial ? ' · 部分區間' : ''}` : point.record ? `${point.record.time} · ${point.record.basal ? '基礎體溫' : '其他時間量測'}${point.record.count > 1 ? ` · 當日共 ${point.record.count} 筆` : ''}${point.record.conflict ? ' · 資料待處理' : ''}` : '當日無體溫記錄') + periodText;
   $('selection-info').innerHTML = `<div><div class="selection-date">${date}</div><span class="selection-time">${h(detail)}</span>${!grouped && point.record?.count > 1 ? '<button type="button" class="text-button" data-action="selected-day">查看當日其他記錄</button>' : ''}</div><div class="selection-actions"><div class="selected-reading"><strong>${tempText(point.temp10)}</strong><span>°C</span></div>${!grouped && point.record ? `<button type="button" class="selection-edit" data-edit-record="${h(point.record.id)}" aria-label="編輯這筆體溫">${icon('edit')}</button>` : ''}</div>`;
+  const lh=lhForPoint(S.view,point);
+  $('lh-selection').innerHTML=`<strong>試紙 ${ratioText(lh.value)}</strong> <span>${grouped ? `每日最高值的平均 · 已記錄 ${lh.count}／${point.totalDays} 天` : lh.record ? `${h(lh.record.time)} · 當日最高值` : '當日尚無可用試紙記錄'}${lh.rows.some(r=>r.conflict) ? ' · 有資料差異，待處理記錄未納入曲線' : ''}</span>`;
+  $('lh-chart-details').hidden=!lh.rows.length;
+  $('lh-chart-rows').innerHTML=lh.rows.map(r=>`<div class="chart-detail-row"><span>${prettyDate(r.date)} ${h(r.time)}${r.conflict?' · 待處理':''}</span><button type="button" class="text-button" data-edit-lh="${h(r.id)}">${ratioText(r.ratio100)} ${icon('edit')}</button></div>`).join('');
   const rows = S.view.records.filter(r => r.date >= from && r.date <= to).sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
   $('selection-details').hidden = !grouped;
   $('selection-details-title').textContent = `查看區間實際量測（${rows.length} 筆）`;
@@ -235,8 +245,48 @@ function renderInsights(pred) {
   $('trend-insight').innerHTML = pred.trend ? `<strong>可能進入高溫期</strong><span class="detail">${prettyDate(pred.trend.start, false)} 起，連續 3 天升溫<br>趨勢提示，並非排卵確診</span>` : '<strong>持續記錄，觀察變化</strong><span class="detail">需連續有效基礎體溫；一般量測及受干擾資料不納入升溫判讀。</span>';
 }
 
+function resetLH(persist = true) {
+  const now = localNow(S.view.profile.timeZone); $('lh-form').reset(); $('lh-date').value = now.date; $('lh-time').value = now.time;
+  S.lhContext = { id: null, parents: [], barrier: S.view.barrier }; S.dirty.lh = false; $('lh-title').textContent = '新增排卵試紙';
+  if (persist && S.ready) flushDraft().catch(fatal);
+}
+function renderLH() {
+  const rows = [...(S.view.lhRecords || [])].sort((a,b)=>b.date.localeCompare(a.date)||b.time.localeCompare(a.time));
+  $('lh-count').textContent = `${rows.length} 筆試紙記錄`;
+  $('lh-history').innerHTML = rows.slice(0,S.lhLimit || 40).map(r=>`<div class="record-item"><div><b>${prettyDate(r.date)}</b> <span>${h(r.time)}</span>${r.conflict ? '<span class="tag warn">待處理</span>' : ''}<p class="record-item-note">${h(r.notes)}</p></div><div class="record-item-right"><strong class="lh-value">${ratioText(r.ratio100)}</strong><button type="button" class="icon-button" data-edit-lh="${h(r.id)}" aria-label="編輯試紙 ${r.date} ${r.time}">${icon('edit')}</button><button type="button" class="icon-button" data-delete-lh="${h(r.id)}" aria-label="刪除試紙 ${r.date} ${r.time}">${icon('trash')}</button></div></div>`).join('') || '<p class="field-help">尚無排卵試紙記錄。</p>';
+  $('more-lh').hidden = rows.length <= (S.lhLimit || 40);
+}
+async function editLH(id) {
+  const e = S.view.entities.get(entityKey('lh',id)), r = S.view.lhRecords.find(r=>r.id===id); if (!r) return;
+  if (e.conflict) { showConflicts(); return; }
+  if (S.dirty.lh && !(await confirmAction('切換試紙記錄','<p>將清除尚未儲存的試紙表單。</p>','開啟記錄'))) return;
+  S.lhContext = { id, parents:e.heads.map(h=>h.rev), barrier:S.view.barrier, timeZone:r.timeZone };
+  $('lh-date').value=r.date; $('lh-time').value=r.time; $('lh-value').value=ratioText(r.ratio100); $('lh-notes').value=r.notes;
+  $('lh-title').textContent='編輯排卵試紙'; S.dirty.lh=true; setEditor('lh'); navigate('records'); await flushDraft();
+}
+async function saveLH(event) {
+  event.preventDefault(); if (!$('lh-form').reportValidity() || S.saving) return;
+  S.saving=true; busy($('save-lh'),true);
+  try {
+    const value={date:$('lh-date').value,time:$('lh-time').value,ratio100:parseRatio($('lh-value').value),notes:$('lh-notes').value.trim(),timeZone:S.lhContext?.timeZone || S.view.profile.timeZone};
+    const id=S.lhContext?.id || uuid();
+    if (S.view.lhRecords.some(r=>r.id!==id && r.date===value.date && r.time===value.time && r.ratio100===value.ratio100) && !(await confirmAction('可能重複的試紙記錄','<p>相同時間及數值已存在，仍要新增嗎？</p>','仍要儲存'))) return;
+    await repo.change(S.key,S.dataset,actor(),[{type:'lh',id,value,parents:S.lhContext?.parents || []}],[],{barrier:S.lhContext?.barrier || S.view.barrier});
+    resetLH(false); await refresh({notify:true}); await flushDraft(); queueSync(); toast('試紙記錄已儲存');
+  } catch(e) { fail(e); } finally {S.saving=false;busy($('save-lh'),false);}
+}
+async function deleteLH(id) {
+  const e=S.view.entities.get(entityKey('lh',id)); if (!e) return;
+  if (e.conflict) {showConflicts();return;}
+  const parents=e.heads.map(h=>h.rev), barrier=S.view.barrier;
+  if (!(await confirmAction('刪除排卵試紙記錄',`<p>${h(valueDescription('lh',e.value))}</p>`,'刪除',true))) return;
+  await repo.change(S.key,S.dataset,actor(),[{type:'lh',id,value:null,parents}],[],{barrier});
+  if (S.lhContext?.id===id) resetLH(false);
+  await refresh({notify:true}); await flushDraft(); queueSync();
+}
+
 function renderHistory() {
-  const stats = statistics(S.view); $('record-total').textContent = `${stats.days} 天・${stats.records} 筆`;
+  const stats = statistics(S.view); $('record-total').textContent = `${stats.days} 天・體溫 ${stats.records} 筆／試紙 ${stats.lhRecords} 筆`;
   const daily = dailyValues(S.view); const filter = $('history-date').value;
   const records = [...S.view.records].reverse().filter(r => !filter || r.date === filter);
   $('more-records').hidden = records.length <= S.historyLimit;
@@ -363,7 +413,7 @@ async function connectGoogle(forceAccount = false) {
     if (localSource && await kv.get(`migration:${key}`) !== migrationStamp) {
       const source = project(localSource);
       if (!source.conflicts.length && !source.stale.length && !source.restoreConflict) {
-        const take = await confirmAction('加入尚未連線的本機記錄？', `<p>本機未連線區有 ${statistics(source).days} 天、${source.records.length} 筆體溫。</p><p>目前已開啟 <b>${h(folder.name)}</b>。可將這些記錄複製合併進此資料夾；本機原始資料仍保留。</p>`, '合併進此資料夾');
+        const take = await confirmAction('加入尚未連線的本機記錄？', `<p>本機未連線區有 ${statistics(source).days} 天、${source.records.length} 筆體溫、${source.lhRecords.length} 筆試紙。</p><p>目前已開啟 <b>${h(folder.name)}</b>。可將這些記錄複製合併進此資料夾；本機原始資料仍保留。</p>`, '合併進此資料夾');
         guard();
         if (take) {
           const changes = currentState(source).filter(e => (e.type !== 'profile' || !S.view.entities.has('profile:main')) && stable(S.view.entities.get(entityKey(e.type, e.id))?.value) !== stable(e.value)).map(e => ({ ...e, ...(S.view.entities.has(entityKey(e.type, e.id)) ? { parents: [] } : {}) }));
@@ -390,7 +440,7 @@ async function disconnectGoogle({ remote = false } = {}) {
     await kv.set('connection', S.config);
     await kv.set('active-workspace', null);
     S.key = 'local'; S.dataset = 'local'; S.meta = null; S.selectedBackup = ''; S.historyLimit = 40; S.backupLimit = 5;
-    S.dirty = { record: false, period: false, profile: false, cloud: false };
+    S.dirty = { record: false, period: false, profile: false, cloud: false, lh: false };
     if ($('modal').open) closeModal();
     $('history-date').value = '';
     if (!remote) channel?.postMessage({ type: 'logout' });
@@ -413,7 +463,7 @@ async function performSync(manual = false) {
     await repo.update(S.key, S.dataset, ws => { ws.backupCatalog = backupFiles(engine.files); return ws; });
     await refresh({ notify: true });
     if (!S.dirty.record) resetRecord(false);
-    if (!S.dirty.period) resetPeriod(false);
+    if (!S.dirty.period) resetPeriod(false); if (!S.dirty.lh) resetLH(false);
     if (manual) toast(S.view.conflicts.length || S.view.stale.length || S.view.restoreConflict ? '已同步，請處理資料差異' : '同步完成');
   } catch (e) { if (S.engine !== engine) return; await refresh(); if (manual) throw e; }
   finally { if (S.engine === engine) { S.syncing = false; busy($('sync-now'), false); renderStatus(); if (S.ws?.outbox.length && S.syncState === 'done') queueSync(1500); } } };
@@ -454,7 +504,7 @@ function renderBackups() {
   if (!files.length) $('backup-list').innerHTML = `<div class="empty-state">${icon('cloud')}<strong>${S.meta ? '尚無雲端備份' : '連線後顯示雲端備份'}</strong><span>${S.meta ? '資料成功同步後，會自動建立完整備份。' : '離線時仍可使用下方 JSON 匯出。'}</span></div>`;
   else $('backup-list').innerHTML = files.slice(0, S.backupLimit).map((file, i) => {
     const p = file.properties || {};
-    return `<label class="backup-option"><input type="radio" name="backup" value="${h(file.id)}" ${file.id === S.selectedBackup ? 'checked' : ''}><span><strong>${formatStamp(file.createdTime, S.view.profile.timeZone)}${i === 0 ? '<span class="latest">最新・預選</span>' : ''}</strong><small>共 ${h(p.bbtDays || '—')} 天資料・${h(p.bbtRecords || '—')} 筆體溫<br>資料期間：${prettyDate(p.bbtStart)} — ${prettyDate(p.bbtEnd)}<br>備份時間：${formatStamp(file.createdTime, S.view.profile.timeZone)}（${h(S.view.profile.timeZone)}）</small></span></label>`;
+    return `<label class="backup-option"><input type="radio" name="backup" value="${h(file.id)}" ${file.id === S.selectedBackup ? 'checked' : ''}><span><strong>${formatStamp(file.createdTime, S.view.profile.timeZone)}${i === 0 ? '<span class="latest">最新・預選</span>' : ''}</strong><small>共 ${h(p.bbtDays || '—')} 天資料・${h(p.bbtRecords || '0')} 筆體溫・${h(p.bbtLH || '0')} 筆試紙<br>資料期間：${prettyDate(p.bbtStart)} — ${prettyDate(p.bbtEnd)}<br>備份時間：${formatStamp(file.createdTime, S.view.profile.timeZone)}（${h(S.view.profile.timeZone)}）</small></span></label>`;
   }).join('');
   $('more-backups').hidden = files.length <= S.backupLimit; $('restore-backup').disabled = !S.selectedBackup;
 }
@@ -480,7 +530,7 @@ async function restoreSnapshot(saved, cloud = false) {
   if (S.view.conflicts.length || S.view.stale.length || S.view.restoreConflict) { showConflicts(); throw new Error('請先處理資料差異，再進行整份還原'); }
   const previewIds = S.ws.events.map(e => e.id).sort().join('|');
   const diff = snapshotDiff(S.view, saved), count = saved.state.filter(e => e.type === 'record').length;
-  const accepted = await confirmAction(cloud ? '還原這個雲端時間點？' : '匯入並取代目前資料？', `<p>選定備份包含 <b>${count} 筆體溫</b>。</p><div class="diff-counts"><div><strong>${diff.added}</strong>新增項目</div><div><strong>${diff.changed}</strong>變更項目</div><div><strong>${diff.removed}</strong>移除項目</div></div><p>${S.meta ? '此操作會在同步後影響同一資料夾的所有共同使用者與裝置。' : '此操作會取代目前本機未連線區的資料。'}</p><p>還原前先建立安全備份；舊裝置後續補傳的修改會另外列出，不直接灌回。</p>`, '確認還原');
+  const accepted = await confirmAction(cloud ? '還原這個雲端時間點？' : '匯入並取代目前資料？', `<p>選定備份包含 <b>${count} 筆體溫、${saved.state.filter(e=>e.type==='lh').length} 筆試紙</b>。</p><div class="diff-counts"><div><strong>${diff.added}</strong>新增項目</div><div><strong>${diff.changed}</strong>變更項目</div><div><strong>${diff.removed}</strong>移除項目</div></div><p>${S.meta ? '此操作會在同步後影響同一資料夾的所有共同使用者與裝置。' : '此操作會取代目前本機未連線區的資料。'}</p><p>還原前先建立安全備份；舊裝置後續補傳的修改會另外列出，不直接灌回。</p>`, '確認還原');
   if (!accepted) return;
   const latest = await repo.read(S.key, S.dataset);
   if (latest.events.map(e => e.id).sort().join('|') !== previewIds) throw new Error('預覽期間資料已更新，請重新選取備份並確認還原差異');
@@ -488,8 +538,8 @@ async function restoreSnapshot(saved, cloud = false) {
   await repo.safety(S.key, S.dataset, before, '還原／匯入前');
   if (cloud) { await S.engine.backup({ force: true, label: '還原前安全備份' }); }
   await repo.restore(S.key, S.dataset, actor(), saved.state, { expectedIds: previewIds });
-  S.dirty.record = false; S.dirty.period = false; S.dirty.profile = false;
-  await refresh({ notify: true }); resetRecord(false); resetPeriod(false); populateProfile(true); await flushDraft();
+  S.dirty.record = false; S.dirty.period = false; S.dirty.profile = false; S.dirty.lh = false;
+  await refresh({ notify: true }); resetRecord(false); resetPeriod(false); resetLH(false); populateProfile(true); await flushDraft();
   if (S.engine && auth.valid) await performSync(true);
   toast('已還原成新的目前版本，原版本仍保留');
 }
@@ -499,6 +549,7 @@ function renderConflictsBanner() { const count = conflictCount(); $('conflict-ba
 function valueDescription(type, value) {
   if (value === null) return '此版本已刪除這個項目';
   if (type === 'record') return `${prettyDate(value.date)} ${value.time} · ${tempText(value.temp10)}°C\n${value.basal ? '基礎體溫' : '其他時間量測'}${value.conditions.length ? ' · ' + value.conditions.join('、') : ''}${value.notes ? '\n' + value.notes : ''}`;
+  if (type === 'lh') return `${prettyDate(value.date)} ${value.time} · 試紙 ${ratioText(value.ratio100)}${value.notes ? ' · '+value.notes : ''}`;
   if (type === 'period') return `${prettyDate(value.start)} — ${value.end ? prettyDate(value.end) : '進行中'}`;
   if (type === 'profile') return `${value.name} · 平均週期 ${value.cycleLength} 天 · ${value.timeZone}`;
   const record = S.view.records.find(r => r.id === value.recordId); return record ? `${record.date} ${record.time} · ${tempText(record.temp10)}°C` : '選取一筆當日主要量測';
@@ -506,7 +557,7 @@ function valueDescription(type, value) {
 function conflictsHTML() {
   let html = '<p class="field-help">同筆資料同時修改時，請選擇要保留的內容。選擇會建立新版本，並保留原始異動。</p>';
   if (S.view.restoreConflict) html += `<article class="conflict-item"><h3>不同裝置同時還原了不同版本</h3>${S.view.restoreHeads.map(e => `<div class="conflict-choice"><small>${h(e.actor)} · ${formatStamp(e.at, S.view.profile.timeZone)}</small><p>${e.state.filter(s => s.type === 'record').length} 筆體溫的還原版本</p><button type="button" class="button secondary compact" data-take-restore="${h(e.id)}">使用此還原版本</button></div>`).join('')}</article>`;
-  for (const entity of S.view.conflicts) html += `<article class="conflict-item"><h3>${({ record: '體溫記錄', period: '月經記錄', primary: '當日主要量測', profile: '個人設定' })[entity.type]}版本不同</h3>${entity.heads.map(head => `<div class="conflict-choice"><small>${h(head.actor || '原始版本')} · ${formatStamp(head.at, S.view.profile.timeZone)}</small><p>${h(valueDescription(entity.type, head.value))}</p><button type="button" class="button secondary compact" data-resolve-key="${h(entityKey(entity.type, entity.id))}" data-resolve-rev="${h(head.rev)}">保留這個版本</button></div>`).join('')}</article>`;
+  for (const entity of S.view.conflicts) html += `<article class="conflict-item"><h3>${({ lh: '排卵試紙', record: '體溫記錄', period: '月經記錄', primary: '當日主要量測', profile: '個人設定' })[entity.type]}版本不同</h3>${entity.heads.map(head => `<div class="conflict-choice"><small>${h(head.actor || '原始版本')} · ${formatStamp(head.at, S.view.profile.timeZone)}</small><p>${h(valueDescription(entity.type, head.value))}</p><button type="button" class="button secondary compact" data-resolve-key="${h(entityKey(entity.type, entity.id))}" data-resolve-rev="${h(head.rev)}">保留這個版本</button></div>`).join('')}</article>`;
   for (const event of S.view.stale) html += `<article class="conflict-item"><h3>還原後，收到舊裝置補傳資料</h3><div class="conflict-choice"><small>${h(event.actor)} · ${formatStamp(event.at, S.view.profile.timeZone)}</small>${event.changes.map(c => `<p>${h(valueDescription(c.type, c.value))}</p>`).join('')}</div><div class="button-row"><button type="button" class="button secondary compact" data-accept-stale="${h(event.id)}">套用這份修改</button><button type="button" class="text-button" data-ignore-stale="${h(event.id)}">保留目前資料</button></div></article>`;
   if (!conflictCount()) html += '<div class="empty-state">所有資料差異已處理完成。</div>';
   return html;
@@ -533,7 +584,7 @@ async function saveProfile(event) {
   if (S.view.restoreConflict) throw new Error('請先處理還原版本差異');
   const value = { name: $('profile-name').value.trim(), cycleLength: Number($('cycle-length').value), timeZone: $('time-zone').value };
   await repo.change(S.key, S.dataset, actor(), [{ type: 'profile', id: 'main', value, parents: profileContext?.parents || [] }], [], { barrier: profileContext?.barrier || S.view.barrier });
-  S.dirty.profile = false; await refresh({ notify: true }); if (!S.dirty.record) resetRecord(false); if (!S.dirty.period) resetPeriod(false); await flushDraft(); toast('個人設定已儲存'); queueSync();
+  S.dirty.profile = false; await refresh({ notify: true }); if (!S.dirty.record) resetRecord(false); if (!S.dirty.period) resetPeriod(false); if (!S.dirty.lh) resetLH(false); await flushDraft(); toast('個人設定已儲存'); queueSync();
 }
 function download(name, content, type = 'application/json') {
   const url = URL.createObjectURL(new Blob([content], { type })); const a = document.createElement('a'); a.href = url; a.download = name; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 30000);
@@ -609,6 +660,10 @@ function bind() {
   $('modal').addEventListener('cancel', event => { event.preventDefault(); closeModal(); });
   $('record-form').addEventListener('submit', saveRecord);
   $('period-form').addEventListener('submit', savePeriod);
+  $('lh-form').addEventListener('submit',saveLH);
+  $('lh-form').addEventListener('input',()=>markDirty('lh'));
+  $('reset-lh').addEventListener('click',async()=>{if (!S.dirty.lh || await confirmAction('清空試紙表單','<p>將清除未儲存的試紙輸入。</p>','清空')) resetLH();});
+  $('more-lh').addEventListener('click',()=>{S.lhLimit=(S.lhLimit||40)+40;renderLH();});
   $('profile-form').addEventListener('submit', e => { saveProfile(e).catch(fail); });
   $('cloud-form').addEventListener('submit', e => { e.preventDefault(); saveConnection(e).catch(fail); });
   for (const [id, type] of [['record-form', 'record'], ['period-form', 'period'], ['profile-form', 'profile'], ['cloud-form', 'cloud']]) $(id).addEventListener('input', () => markDirty(type));
@@ -652,6 +707,8 @@ function bind() {
     if (button.dataset.action === 'selected-day') { $('history-date').value = S.selection; S.historyLimit = 40; renderHistory(); navigate('records'); }
     if (button.dataset.editRecord) editRecord(button.dataset.editRecord).catch(fail);
     if (button.dataset.deleteRecord) deleteRecord(button.dataset.deleteRecord).catch(fail);
+    if (button.dataset.editLh) editLH(button.dataset.editLh).catch(fail);
+    if (button.dataset.deleteLh) deleteLH(button.dataset.deleteLh).catch(fail);
     if (button.dataset.editPeriod) editPeriod(button.dataset.editPeriod).catch(fail);
     if (button.dataset.deletePeriod) deletePeriod(button.dataset.deletePeriod).catch(fail);
     if (button.dataset.resolveKey) resolveConflict(button.dataset.resolveKey, button.dataset.resolveRev).catch(fail);

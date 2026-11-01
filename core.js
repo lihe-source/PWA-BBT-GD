@@ -1,6 +1,6 @@
 /* 溫序 BBT — domain logic, independent of the browser. */
 export const APP = 'bbt-gd';
-export const VERSION = '1.0.3';
+export const VERSION = '1.0.4';
 export const SCHEMA = 1;
 export const CONDITIONS = ['發燒', '睡眠不足', '飲酒', '量測時間不同', '其他干擾'];
 export const DEFAULT_PROFILE = { name: '我的體溫', cycleLength: 28, timeZone: 'Asia/Taipei' };
@@ -62,6 +62,11 @@ export function validateValue(type, value) {
     if (typeof value.basal !== 'boolean' || !Array.isArray(value.conditions) || value.conditions.some(x => !CONDITIONS.includes(x))) throw new Error('量測分類不正確');
     if (typeof value.notes !== 'string' || value.notes.length > 2000) throw new Error('備註最多 2000 字');
     try { new Intl.DateTimeFormat('en', { timeZone: value.timeZone }); } catch { throw new Error('量測時區不正確'); }
+  } else if (type === 'lh') {
+    if (!validDate(value.date) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(value.time || '')) throw new Error('試紙日期或時間不正確');
+    if (!Number.isInteger(value.ratio100) || value.ratio100 < 0 || value.ratio100 > 100) throw new Error('試紙數值需介於 0.00～1.00');
+    if (typeof value.notes !== 'string' || value.notes.length > 2000) throw new Error('備註最多 2000 字');
+    try { new Intl.DateTimeFormat('en', { timeZone: value.timeZone }); } catch { throw new Error('量測時區不正確'); }
   } else if (type === 'period') {
     if (!validDate(value.start) || (value.end && (!validDate(value.end) || value.end < value.start))) throw new Error('月經結束日期不能早於開始日期');
   } else if (type === 'primary') {
@@ -72,7 +77,7 @@ export function validateValue(type, value) {
   } else throw new Error('不支援的資料類型');
 }
 function validateEntity(item) {
-  if (!item || !['record', 'period', 'primary', 'profile'].includes(item.type)) throw new Error('不支援的資料類型');
+  if (!item || !['record', 'lh', 'period', 'primary', 'profile'].includes(item.type)) throw new Error('不支援的資料類型');
   requireId(item.id);
   if (item.type === 'primary' && !validDate(item.id)) throw new Error('每日主要量測日期不正確');
   if (item.type === 'profile' && item.id !== 'main') throw new Error('個人設定識別碼不正確');
@@ -146,19 +151,20 @@ export function project(events) {
     entities.set(key, entity);
     if (conflict) conflicts.push(entity);
   }
-  const records = [], periods = [], primaries = new Map();
+  const records = [], lhRecords = [], periods = [], primaries = new Map();
   let profile = clone(DEFAULT_PROFILE);
   for (const entity of entities.values()) {
     if (entity.value === null) continue;
     const value = { ...entity.value, id: entity.id, conflict: entity.conflict };
     if (entity.type === 'record') records.push(value);
+    if (entity.type === 'lh') lhRecords.push(value);
     if (entity.type === 'period') periods.push(value);
     if (entity.type === 'primary') primaries.set(entity.id, { ...value, conflict: entity.conflict });
     if (entity.type === 'profile') profile = { ...DEFAULT_PROFILE, ...entity.value };
   }
   records.sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time) || a.id.localeCompare(b.id));
   periods.sort((a, b) => a.start.localeCompare(b.start));
-  return { entities, records, periods, primaries, profile, conflicts, restoreHeads, restoreConflict: restoreHeads.length > 1, stale, barrier };
+  return { entities, records, lhRecords, periods, primaries, profile, conflicts, restoreHeads, restoreConflict: restoreHeads.length > 1, stale, barrier };
 }
 export function currentState(view) {
   return [...view.entities.values()].filter(e => e.value !== null).map(e => ({ type: e.type, id: e.id, value: clone(e.value) })).sort((a, b) => entityKey(a.type, a.id).localeCompare(entityKey(b.type, b.id)));
@@ -227,8 +233,8 @@ export function periodIntervals(view, start, end, now) {
   return merged;
 }
 export function statistics(view) {
-  const days = [...new Set(view.records.map(r => r.date))].sort();
-  return { days: days.length, records: view.records.length, start: days[0] || '', end: days.at(-1) || '', periods: view.periods.length };
+  const days = [...new Set([...view.records, ...(view.lhRecords || [])].map(r => r.date))].sort();
+  return { days: days.length, records: view.records.length, start: days[0] || '', end: days.at(-1) || '', periods: view.periods.length, lhRecords: (view.lhRecords || []).length };
 }
 const median = values => { const v = [...values].sort((a, b) => a - b); const i = Math.floor(v.length / 2); return v.length % 2 ? v[i] : (v[i - 1] + v[i]) / 2; };
 export function predict(view, today) {
@@ -301,7 +307,23 @@ export function csv(view) {
     return `"${s.replaceAll('"', '""')}"`;
   };
   const daily = dailyValues(view);
-  const rows = [['日期', '時間', '體溫(°C)', '基礎體溫', '當日主要量測', '干擾因素', '備註', '量測時區', '資料差異']];
-  for (const r of view.records) rows.push([r.date, r.time, tempText(r.temp10), r.basal ? '是' : '否', daily.get(r.date)?.id === r.id ? '是' : '否', r.conditions.join('、'), r.notes, r.timeZone, r.conflict ? '待處理' : '']);
+  const rows = [['日期', '時間', '體溫(°C)', '基礎體溫', '當日主要量測', '干擾因素', '備註', '量測時區', '資料差異', '排卵試紙數值']];
+  for (const r of view.records) rows.push([r.date, r.time, tempText(r.temp10), r.basal ? '是' : '否', daily.get(r.date)?.id === r.id ? '是' : '否', r.conditions.join('、'), r.notes, r.timeZone, r.conflict ? '待處理' : '', '']);
+  for (const r of view.lhRecords || []) rows.push([r.date, r.time, '', '', '', '', r.notes, r.timeZone, r.conflict ? '待處理' : '', ratioText(r.ratio100)]);
   return '\ufeff' + rows.map(row => row.map(quote).join(',')).join('\r\n');
+}
+
+export const ratioText = value => Number.isFinite(value) ? (value / 100).toFixed(2) : '—';
+export function parseRatio(input) {
+  const text = String(input).trim();
+  if (!/^(?:0(?:\.\d{1,2})?|1(?:\.0{1,2})?)$/.test(text)) throw new Error('請輸入 0.00～1.00，最多兩位小數');
+  return Math.round(Number(text) * 100);
+}
+export function lhForPoint(view, point) {
+  const start = point.start || point.date, end = point.displayEnd || point.date;
+  const rows = (view.lhRecords || []).filter(r => r.date >= start && r.date <= end).sort((a,b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time) || a.id.localeCompare(b.id));
+  const daily = new Map();
+  for (const r of rows) if (!r.conflict && (!daily.has(r.date) || r.ratio100 >= daily.get(r.date).ratio100)) daily.set(r.date, r);
+  const values = [...daily.values()];
+  return { rows, count: values.length, value: values.length ? values.reduce((n,r)=>n+r.ratio100,0)/values.length : null, record: point.start ? null : values[0] || null };
 }

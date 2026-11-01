@@ -221,7 +221,7 @@ export class SyncEngine {
     if (saved) payload = saved;
     else { payload = { ...snapshot(ws.events, this.dataset), label }; await this.repo.kv.set(`backup-payload:${this.key}:${operation}`, payload); }
     const id = await this.repo.reserve(this.key, this.dataset, operation, () => this.drive.reserveId());
-    const file = await this.drive.create(id, payload, { bbtKind: 'backup', bbtState: signature, bbtDays: String(payload.stats.days), bbtRecords: String(payload.stats.records), bbtStart: payload.stats.start, bbtEnd: payload.stats.end });
+    const file = await this.drive.create(id, payload, { bbtKind: 'backup', bbtState: signature, bbtDays: String(payload.stats.days), bbtRecords: String(payload.stats.records), bbtLH: String(payload.stats.lhRecords || 0), bbtStart: payload.stats.start, bbtEnd: payload.stats.end });
     this.files.push(file);
     await this.repo.update(this.key, this.dataset, state => { state.lastBackupSignature = signature; delete state.uploads[operation]; return state; });
     await this.repo.kv.set(`backup-payload:${this.key}:${operation}`, null);
