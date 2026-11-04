@@ -1,4 +1,4 @@
-import { APP, VERSION, DEFAULT_PROFILE, CONDITIONS, clone, uuid, stable, escapeHTML as h, addDays, daysBetween, validDate, localNow, formatStamp, tempText, parseTemperature, parseRatio, ratioText, lhForPoint, entityKey, project, currentState, dailyValues, dailySeries, weeklySeries, biweeklySeries, periodIntervals, statistics, predict, snapshot, validateSnapshot, snapshotDiff, csv } from './core.js';
+import { APP, VERSION, DEFAULT_PROFILE, CONDITIONS, clone, uuid, stable, escapeHTML as h, addDays, daysBetween, validDate, localNow, formatStamp, tempText, temperature10, parseTemperature, parseRatio, ratioText, lhForPoint, entityKey, project, currentState, dailyValues, dailySeries, weeklySeries, biweeklySeries, periodIntervals, statistics, predict, snapshot, validateSnapshot, snapshotDiff, csv } from './core.js';
 import { chartLayout } from './chart.js';
 import { IndexedKV, Repository } from './db.js';
 import { GoogleAuth, Drive, SyncEngine, folderId, loadGoogle, backupFiles } from './drive.js';
@@ -320,8 +320,8 @@ async function saveRecord(event) {
   try {
     const temp10 = parseTemperature($('record-temperature').value);
     if ((temp10 < 350 || temp10 > 400) && !(await confirmAction('體溫超出圖表範圍', `<p>你輸入的是 <b>${tempText(temp10)}°C</b>，超出圖表的 35～40°C 範圍。</p><p>儲存後保留原值，以圖表邊緣標示，且不納入排卵趨勢分析。請先確認數值與單位。</p>`, '確認儲存'))) return;
-    const id = S.recordContext?.id || uuid(); const value = { date: $('record-date').value, time: $('record-time').value, temp10, basal: $('record-basal').checked, conditions: [...document.querySelectorAll('[name=condition]:checked')].map(e => e.value), notes: $('record-notes').value.trim(), timeZone: S.recordContext?.timeZone || S.view.profile.timeZone };
-    const duplicate = S.view.records.find(r => r.id !== id && r.date === value.date && r.time === value.time && r.temp10 === value.temp10);
+    const id = S.recordContext?.id || uuid(); const value = { date: $('record-date').value, time: $('record-time').value, temp100: Math.round(temp10 * 10), basal: $('record-basal').checked, conditions: [...document.querySelectorAll('[name=condition]:checked')].map(e => e.value), notes: $('record-notes').value.trim(), timeZone: S.recordContext?.timeZone || S.view.profile.timeZone };
+    const duplicate = S.view.records.find(r => r.id !== id && r.date === value.date && r.time === value.time && Math.round(r.temp10 * 10) === value.temp100);
     if (duplicate && !(await confirmAction('相同時間已有體溫記錄', `<p>${prettyDate(value.date)} ${value.time} 已有 ${tempText(temp10)}°C 的記錄。</p><p>是否仍要另外新增一筆？</p>`, '仍要新增'))) return;
     const changes = [{ type: 'record', id, value, parents: S.recordContext?.parents || [] }];
     const context = S.recordContext;
@@ -548,7 +548,7 @@ function conflictCount() { return S.view.conflicts.length + S.view.stale.length 
 function renderConflictsBanner() { const count = conflictCount(); $('conflict-banner').hidden = !count; $('conflict-banner-text').textContent = `${count} 項資料差異待處理，雙方版本皆已保留。`; }
 function valueDescription(type, value) {
   if (value === null) return '此版本已刪除這個項目';
-  if (type === 'record') return `${prettyDate(value.date)} ${value.time} · ${tempText(value.temp10)}°C\n${value.basal ? '基礎體溫' : '其他時間量測'}${value.conditions.length ? ' · ' + value.conditions.join('、') : ''}${value.notes ? '\n' + value.notes : ''}`;
+  if (type === 'record') return `${prettyDate(value.date)} ${value.time} · ${tempText(temperature10(value))}°C\n${value.basal ? '基礎體溫' : '其他時間量測'}${value.conditions.length ? ' · ' + value.conditions.join('、') : ''}${value.notes ? '\n' + value.notes : ''}`;
   if (type === 'lh') return `${prettyDate(value.date)} ${value.time} · 試紙 ${ratioText(value.ratio100)}${value.notes ? ' · '+value.notes : ''}`;
   if (type === 'period') return `${prettyDate(value.start)} — ${value.end ? prettyDate(value.end) : '進行中'}`;
   if (type === 'profile') return `${value.name} · 平均週期 ${value.cycleLength} 天 · ${value.timeZone}`;

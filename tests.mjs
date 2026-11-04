@@ -18,6 +18,45 @@ const D = 'drive:folder123456789';
 const record = (date = '2026-10-18', temp10 = 365, extra = {}) => ({ date, time: '07:10', temp10, basal: true, conditions: [], notes: '', timeZone: 'Asia/Taipei', ...extra });
 const change = (events, id, value, options = {}) => buildChange(events, D, options.actor || 'test@example.invalid', [{ type: 'record', id, value, ...(options.parents ? { parents: options.parents } : {}) }], [], options);
 const recordsView = records => project([buildChange([], D, 'test', records.map((value, i) => ({ type: 'record', id: `record-${i}`, value })))]);
+const preciseRecord = (date='2026-10-18', temp100=3655) => { const r=record(date); delete r.temp10; return {...r,temp100}; };
+
+test('hundredths input retains every allowed value without silent rounding of extra decimals', () => {
+  for(let n=2000;n<=5000;n++) {
+    const input=(n/100).toFixed(2);
+    assert.equal(Math.round(parseTemperature(input)*10),n);
+    assert.equal(Core.tempText(parseTemperature(input)),input);
+  }
+  assert.equal(parseTemperature('36,55'),365.5);
+  for(const input of ['19.99','50.01','36.555']) assert.throws(()=>parseTemperature(input));
+});
+test('new hundredths records and unchanged legacy records coexist without rewriting events', () => {
+  const old=change([],'old',record()), before=stable(old);
+  const newer=buildChange([old],D,'test',[{type:'record',id:'new',value:preciseRecord('2026-10-19')}]);
+  const view=project([old,newer]); assert.equal(stable(old),before);
+  assert.equal(Core.tempText(view.records[0].temp10),'36.50'); assert.equal(Core.tempText(view.records[1].temp10),'36.55');
+  const state=currentState(view); assert.equal(state.find(e=>e.id==='new').value.temp100,3655);
+  assert.equal(state.find(e=>e.id==='new').value.temp10,undefined);
+  assert.equal(state.find(e=>e.id==='old').value.temp10,365);
+});
+test('hundredths import rejects invalid precision, bounds, and ambiguous dual fields', () => {
+  for(const temp100 of [1999,5001,3655.1,'3655',null]) assert.throws(()=>recordsView([preciseRecord(undefined,temp100)]));
+  assert.throws(()=>recordsView([{...preciseRecord(),temp10:365}]));
+});
+test('weekly and fortnightly means keep full source precision until display', () => {
+  const view=recordsView([preciseRecord('2026-10-12',3655),preciseRecord('2026-10-13',3661)]);
+  for(const series of [weeklySeries,Core.biweeklySeries]) {
+    const point=series(view,'2026-10-12','2026-10-13')[0];
+    assert.ok(Math.abs(point.temp10-365.8)<1e-9); assert.equal(Core.tempText(point.temp10),'36.58');
+  }
+});
+test('editing a legacy record to hundredths survives snapshot restore and CSV export', () => {
+  const old=change([],'r',record()), edit=change([old],'r',preciseRecord());
+  const saved=snapshot([old,edit],D); validateSnapshot(saved,D);
+  assert.equal(saved.state[0].value.temp100,3655);
+  const restored=buildRestore([old,edit],D,'test',saved.state);
+  const view=project([old,edit,restored]); assert.equal(view.records[0].temp10,365.5);
+  assert.match(csv(view),/36\.55/);
+});
 
 test('dates: leap years, invalid dates and timezone-independent date math', () => {
   assert.equal(validDate('2024-02-29'), true); assert.equal(validDate('2026-02-29'), false);
@@ -31,9 +70,9 @@ test('measurement defaults use the selected time zone, including midnight', () =
   assert.deepEqual(localNow('Asia/Taipei', new Date('2026-10-17T16:05:00Z')), { date: '2026-10-18', time: '00:05', timeZone: 'Asia/Taipei' });
   assert.equal(localNow('America/Los_Angeles', new Date('2026-10-18T01:00:00Z')).date, '2026-10-17');
 });
-test('temperature input preserves tenths and rejects extra precision or nonnumeric formats', () => {
+test('temperature input preserves hundredths and rejects excess precision or nonnumeric formats', () => {
   assert.equal(parseTemperature('36.5'), 365); assert.equal(parseTemperature('36,6'), 366); assert.equal(parseTemperature('40'), 400);
-  for (const value of ['', 'NaN', '36.55', '3e1', '0x24', '-36.5', '100', '19.9']) assert.throws(() => parseTemperature(value));
+  for (const value of ['', 'NaN', '36.555', '3e1', '0x24', '-36.5', '100', '19.9']) assert.throws(() => parseTemperature(value));
 });
 test('same-day primary selection, missing days and real recorded-day count', () => {
   const events = [buildChange([], D, 'test', [
@@ -324,7 +363,7 @@ test('daily chart template displays persistent point labels and selected date/ti
   ui.app.renderChart();
   const header = ui.element('selection-info').innerHTML, chart = ui.element('temperature-chart').innerHTML;
   assert.match(header, /26\/10\/16/); assert.match(header, /06:45/); assert.match(header, /36\.4/);
-  assert.match(chart, /class="point-value">36\.4°C/); assert.match(chart, /class="point-value">36\.6°C/);
+  assert.match(chart, /class="point-value">36\.40°C/); assert.match(chart, /class="point-value">36\.60°C/);
   assert.match(chart, /縱軸35至40/); assert.equal((chart.match(/class="chart-path"/g) || []).length, 2);
 });
 test('weekly chart template shows weekly average and day count without inventing a measurement time', async () => {
@@ -433,7 +472,7 @@ test('partial weekly and fortnightly ranges average only selected daily primary 
     const groups = Core.groupedSeries(view, '2026-10-06', '2026-10-08', span);
     assert.equal(groups.length, 1); assert.equal(groups[0].totalDays, 3); assert.equal(groups[0].partial, true);
     assert.equal(groups[0].count, 3); assert.equal(groups[0].temp10, (360 + 365 + 366) / 3);
-    assert.equal(Core.tempText(groups[0].temp10), '36.4');
+    assert.equal(Core.tempText(groups[0].temp10), '36.37');
   }
 });
 test('empty fortnight retains a gap and a single-day partial range has a one-day denominator', () => {
@@ -580,4 +619,27 @@ test('dense LH charts hide nonselected labels while keeping all date targets', a
 test('LH draft preserves a zero input, independent date, time and notes', async () => {
   const ui=await appHarness(); ui.element('lh-value').value='0.00'; ui.element('lh-date').value='2026-10-12'; ui.element('lh-time').value='21:35'; ui.element('lh-notes').value='晚間';
   const draft=ui.app.captureForms(); assert.equal(draft.lh.value,'0.00'); assert.equal(draft.lh.time,'21:35'); assert.equal(draft.lh.notes,'晚間');
+});
+
+test('two devices synchronize mixed legacy and hundredths data and back up the exact integer', async () => {
+  const drive=new FakeDrive(),a=device(drive),b=device(drive);
+  await a.repo.change('device',D,'A',[{type:'record',id:'old',value:record()}]);
+  await b.repo.change('device',D,'B',[{type:'record',id:'new',value:preciseRecord('2026-10-19',3667)}]);
+  await a.sync.sync(); await b.sync.sync(); await a.sync.sync();
+  for(const dev of [a,b]) {
+    const view=await dev.repo.view('device',D);
+    assert.equal(Core.tempText(view.records[0].temp10),'36.50');
+    assert.equal(Core.tempText(view.records[1].temp10),'36.67');
+  }
+  const saved=await a.sync.readBackup(backupFiles(await drive.list())[0].id);
+  assert.equal(saved.state.find(e=>e.id==='new').value.temp100,3667);
+});
+test('hundredths appear in chart labels, selection, details, and unsaved form capture', async () => {
+  const ui=await appHarness(); ui.app.S.view=recordsView([preciseRecord()]);
+  ui.app.S.prefs={mode:'day',range:'custom',start:'2026-10-18',end:'2026-10-18'};
+  ui.app.renderChart();
+  assert.match(ui.element('temperature-chart').innerHTML,/36\.55°C/);
+  assert.match(ui.element('selection-info').innerHTML,/36\.55/);
+  assert.match(ui.element('selection-rows').innerHTML,/36\.55°C/);
+  ui.element('record-temperature').value='36.55'; assert.equal(ui.app.captureForms().record.temperature,'36.55');
 });

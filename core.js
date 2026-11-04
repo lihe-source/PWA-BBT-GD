@@ -1,6 +1,6 @@
 /* 溫序 BBT — domain logic, independent of the browser. */
 export const APP = 'bbt-gd';
-export const VERSION = '1.0.4';
+export const VERSION = '1.0.5';
 export const SCHEMA = 1;
 export const CONDITIONS = ['發燒', '睡眠不足', '飲酒', '量測時間不同', '其他干擾'];
 export const DEFAULT_PROFILE = { name: '我的體溫', cycleLength: 28, timeZone: 'Asia/Taipei' };
@@ -43,12 +43,15 @@ export function formatStamp(value, zone = 'Asia/Taipei') {
 }
 export function parseTemperature(input) {
   const text = String(input).trim().replace(',', '.');
-  if (!/^\d{2}(?:\.\d)?$/.test(text)) throw new Error('請輸入小數第一位的攝氏體溫，例如 36.5');
-  const value = Math.round(Number(text) * 10);
-  if (value < 200 || value > 500) throw new Error('體溫需介於 20.0～50.0°C，請檢查輸入');
+  if (!/^\d{2}(?:\.\d{1,2})?$/.test(text)) throw new Error('請輸入最多兩位小數的攝氏體溫，例如 36.55');
+  const value = Math.round(Number(text) * 100) / 10;
+  if (value < 200 || value > 500) throw new Error('體溫需介於 20.00～50.00°C，請檢查輸入');
   return value;
 }
-export const tempText = temp10 => Number.isFinite(temp10) ? (temp10 / 10).toFixed(1) : '—';
+export const tempText = temp10 => Number.isFinite(temp10) ? (temp10 / 10).toFixed(2) : '—';
+
+// Old records retain integer tenths; new records store integer hundredths.
+export const temperature10 = value => Object.hasOwn(value, 'temp100') ? value.temp100 / 10 : value.temp10;
 
 function requireId(id) {
   if (typeof id !== 'string' || !/^[A-Za-z0-9_.:-]{1,160}$/.test(id)) throw new Error('資料識別碼不正確');
@@ -58,7 +61,9 @@ export function validateValue(type, value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('資料內容不正確');
   if (type === 'record') {
     if (!validDate(value.date) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(value.time || '')) throw new Error('量測日期或時間不正確');
-    if (!Number.isInteger(value.temp10) || value.temp10 < 200 || value.temp10 > 500) throw new Error('體溫資料不正確');
+    if (Object.hasOwn(value, 'temp100')) {
+      if (!Number.isInteger(value.temp100) || value.temp100 < 2000 || value.temp100 > 5000 || Object.hasOwn(value, 'temp10')) throw new Error('體溫資料不正確');
+    } else if (!Number.isInteger(value.temp10) || value.temp10 < 200 || value.temp10 > 500) throw new Error('體溫資料不正確');
     if (typeof value.basal !== 'boolean' || !Array.isArray(value.conditions) || value.conditions.some(x => !CONDITIONS.includes(x))) throw new Error('量測分類不正確');
     if (typeof value.notes !== 'string' || value.notes.length > 2000) throw new Error('備註最多 2000 字');
     try { new Intl.DateTimeFormat('en', { timeZone: value.timeZone }); } catch { throw new Error('量測時區不正確'); }
@@ -156,7 +161,7 @@ export function project(events) {
   for (const entity of entities.values()) {
     if (entity.value === null) continue;
     const value = { ...entity.value, id: entity.id, conflict: entity.conflict };
-    if (entity.type === 'record') records.push(value);
+    if (entity.type === 'record') records.push({ ...value, temp10: temperature10(value) });
     if (entity.type === 'lh') lhRecords.push(value);
     if (entity.type === 'period') periods.push(value);
     if (entity.type === 'primary') primaries.set(entity.id, { ...value, conflict: entity.conflict });
