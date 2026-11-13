@@ -20,6 +20,42 @@ const change = (events, id, value, options = {}) => buildChange(events, D, optio
 const recordsView = records => project([buildChange([], D, 'test', records.map((value, i) => ({ type: 'record', id: `record-${i}`, value })))]);
 const preciseRecord = (date='2026-10-18', temp100=3655) => { const r=record(date); delete r.temp10; return {...r,temp100}; };
 
+test('all chart modes bridge missing periods for both curves while keeping missing data empty', async () => {
+  for(const mode of ['day','week','biweek']) {
+    const ui=await appHarness();
+    const events=[buildChange([],D,'test',[
+      {type:'record',id:'a',value:preciseRecord('2026-09-02',3655)},
+      {type:'record',id:'b',value:preciseRecord('2026-10-20',3675)},
+      {type:'lh',id:'c',value:lhRecord('2026-09-02',0)},
+      {type:'lh',id:'d',value:lhRecord('2026-10-20',75)}
+    ])];
+    ui.app.S.view=project(events); const before=stable(currentState(ui.app.S.view));
+    ui.app.S.prefs={mode,range:'custom',start:'2026-09-01',end:'2026-10-31'};
+    ui.app.renderChart(); const chart=ui.element('temperature-chart').innerHTML;
+    for(const cls of ['chart-path','lh-path']) {
+      const paths=[...chart.matchAll(new RegExp(`<path class="${cls}" d="([^"]+)"`,'g'))];
+      assert.equal(paths.length,1); assert.equal((paths[0][1].match(/M/g)||[]).length,1); assert.equal((paths[0][1].match(/L/g)||[]).length,1);
+    }
+    assert.equal((chart.match(/class="lh-point"/g)||[]).length,2);
+    assert.equal((chart.match(/class="chart-point"/g)||[]).length,2);
+    assert.equal(stable(currentState(ui.app.S.view)),before);
+    assert.equal(statistics(ui.app.S.view).days,2);
+    const missing=ui.app.S.series.find(p=>p.temp10===null && Core.lhForPoint(ui.app.S.view,p).value===null);
+    assert.ok(missing); ui.app.S.selection=missing.date; ui.app.renderChart();
+    assert.match(ui.element('selection-info').innerHTML,/—/); assert.match(ui.element('lh-selection').innerHTML,/—/);
+  }
+});
+test('empty and single-point charts never fabricate lines or readings', async () => {
+  for(const populated of [false,true]) {
+    const ui=await appHarness(); ui.app.S.view=populated?recordsView([preciseRecord()]):project([]);
+    ui.app.S.prefs={mode:'day',range:'custom',start:'2026-10-01',end:'2026-10-31'}; ui.app.renderChart();
+    const chart=ui.element('temperature-chart').innerHTML;
+    const path=chart.match(/<path class="chart-path" d="([^"]+)"/);
+    if(populated){assert.ok(path);assert.doesNotMatch(path[1],/L/);assert.equal((chart.match(/class="chart-point"/g)||[]).length,1);}
+    else {assert.equal(path,null);assert.match(chart,/chart-empty-overlay/);}
+  }
+});
+
 test('hundredths input retains every allowed value without silent rounding of extra decimals', () => {
   for(let n=2000;n<=5000;n++) {
     const input=(n/100).toFixed(2);
@@ -364,7 +400,7 @@ test('daily chart template displays persistent point labels and selected date/ti
   const header = ui.element('selection-info').innerHTML, chart = ui.element('temperature-chart').innerHTML;
   assert.match(header, /26\/10\/16/); assert.match(header, /06:45/); assert.match(header, /36\.4/);
   assert.match(chart, /class="point-value">36\.40°C/); assert.match(chart, /class="point-value">36\.60°C/);
-  assert.match(chart, /縱軸35至40/); assert.equal((chart.match(/class="chart-path"/g) || []).length, 2);
+  assert.match(chart, /縱軸35至40/); assert.equal((chart.match(/class="chart-path"/g) || []).length, 1);
 });
 test('weekly chart template shows weekly average and day count without inventing a measurement time', async () => {
   const ui = await appHarness(); ui.app.S.view = recordsView([record('2026-10-12', 360), record('2026-10-14', 370)]);

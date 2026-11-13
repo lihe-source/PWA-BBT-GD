@@ -165,8 +165,8 @@ function renderChart() {
   const selectedIndex = series.findIndex(p => p.date === S.selection);
   for (let i = 0; i < series.length; i++) {
     const p = series[i], px = positions[i], selected = p.date === S.selection;
-    if (p.temp10 === null) { if (segment.length) segments.push(segment); segment = []; }
-    else {
+    // Connect measured points across missing dates without inventing readings.
+    if (p.temp10 !== null) {
       const py = y(p.temp10); segment.push([px, py]);
       const arrow = p.temp10 > 400 ? '↑' : p.temp10 < 350 ? '↓' : '';
       dots += `${selected ? `<circle cx="${px}" cy="${py}" r="11" class="selected-halo"/>` : ''}<circle cx="${px}" cy="${py}" r="${selected ? 5.5 : showValues ? 4.2 : 2.5}" class="chart-point${!grouped && !p.record.basal ? ' other' : ''}${p.record?.conflict ? ' conflicted' : ''}"/>`;
@@ -185,13 +185,13 @@ function renderChart() {
   const selectedLine = selectedIndex >= 0 ? `<line x1="${positions[selectedIndex]}" x2="${positions[selectedIndex]}" y1="${top}" y2="${bottom + 11}" class="selected-line"/>` : '';
   let lhPath='', lhDots='', lhSegment=[];
   const flushLH=()=>{ if(lhSegment.length) lhPath+=`<path class="lh-path" d="${lhSegment.map(([x,y],i)=>`${i?'L':'M'}${x},${y}`).join(' ')}"/>`;lhSegment=[]; };
-  series.forEach((p,i)=>{const lh=lhForPoint(S.view,p); if(lh.value===null){flushLH();return;} const px=positions[i],py=bottom-lh.value/100*(bottom-top);lhSegment.push([px,py]);lhDots+=`<rect class="lh-point" x="${px-3}" y="${py-3}" width="6" height="6"/>`;if(showValues || p.date===S.selection) lhDots+=`<text class="lh-label" x="${px}" y="${py+16}">${ratioText(lh.value)}</text>`;});flushLH();
+  series.forEach((p,i)=>{const lh=lhForPoint(S.view,p); if(lh.value===null)return; const px=positions[i],py=bottom-lh.value/100*(bottom-top);lhSegment.push([px,py]);lhDots+=`<rect class="lh-point" x="${px-3}" y="${py-3}" width="6" height="6"/>`;if(showValues || p.date===S.selection) lhDots+=`<text class="lh-label" x="${px}" y="${py+16}">${ratioText(lh.value)}</text>`;});flushLH();
   let rightAxis='';for(let n=100;n>=0;n-=20) rightAxis+=`<text x="5" y="${bottom-n/100*(bottom-top)}">${ratioText(n)}</text>`;
   const hasValues = series.some(p => p.temp10 !== null || lhForPoint(S.view,p).value!==null);
   chart.innerHTML = `<svg class="chart-axis" style="height:${height}px" viewBox="0 0 37 ${height}" aria-hidden="true">${axis}</svg><div class="chart-scroll" aria-label="體溫與試紙圖表，可左右捲動"><svg width="${width}" height="${height}" style="height:${height}px" viewBox="0 0 ${width} ${height}" role="group" aria-label="${mode === 'biweek' ? '雙週平均' : grouped ? '每週平均' : '每日'}體溫與試紙折線圖，左縱軸35至40攝氏，右縱軸試紙0.00至1.00">${bands}${lines}${selectedLine}${paths}${lhPath}${dots}${lhDots}${hits}</svg></div><svg class="chart-axis lh-axis" style="height:${height}px" viewBox="0 0 46 ${height}" aria-label="右軸：排卵試紙數值 0.00 至 1.00">${rightAxis}</svg>${!hasValues ? `<div class="chart-empty-overlay"><strong>這段日期尚無體溫或試紙資料</strong><span>已記錄的經期仍會顯示於背景與下緣色帶</span><button class="button secondary compact" type="button" data-action="new-record">${icon('plus')}記錄體溫</button></div>` : ''}`;
   const scroll = chart.querySelector('.chart-scroll');
   if (S.scrollToSelection && selectedIndex >= 0) { scroll.scrollLeft = Math.max(0, positions[selectedIndex] - viewportWidth * .65); S.scrollToSelection = false; } else scroll.scrollLeft = oldScroll;
-  $('density-hint').textContent = showValues ? '點日期或資料點查看詳情' : '資料較密集，點選後顯示數值；可放大查看';
+  $('density-hint').textContent = showValues ? '點日期或資料點查看詳情；缺測日期以前後資料連線' : '資料較密集，點選後顯示數值；缺測日期以前後資料連線';
   $('zoom-label').textContent = `${S.prefs.chartZoom || 1}×`;
   $('zoom-out').disabled = !(S.prefs.chartZoom > 1); $('zoom-in').disabled = S.prefs.chartZoom >= 128;
   $('previous-point').disabled = selectedIndex <= 0; $('next-point').disabled = selectedIndex >= series.length - 1;

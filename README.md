@@ -1,4 +1,4 @@
-# 溫序 BBT｜PWA-BBT-GD V1.0.5
+# 溫序 BBT｜PWA-BBT-GD V1.0.6
 
 女性每日體溫與月經週期記錄 PWA。原生 HTML / CSS / JavaScript，不需 npm install、不需編譯、不需後端，可直接放上 GitHub Pages。
 
@@ -10,7 +10,18 @@
 
 本 ZIP 不包含真實 Google 憑證或個人資料，也尚未代為建立或部署 GitHub Repository。此版本只需要 OAuth Web Client ID 與資料夾位置，不需要 API Key；不要輸入 Client Secret 或服務帳戶金鑰。
 
-## V1.0.5 更新內容
+## V1.0.6 更新內容
+
+- 體溫及排卵試紙曲線會跨過缺測日期，直接連接前後有資料的點；日、週、雙週模式與橫向檢視共用此行為。
+- 連線僅供閱讀趨勢，缺測日期仍是空值；不新增資料點、不補零、不改寫記錄或備份，亦不改變平均計算。
+- 點選缺測日期仍顯示無記錄；選取區間首尾缺資料時，不會向外延伸；只有一筆記錄時僅顯示資料點。
+- 保留兩位小數體溫、右側試紙座標軸、經期著色、日期範圍、縮放、同步、備份還原及自動／手動版本更新。
+
+更新方式：完整覆蓋原 GitHub Repository 根目錄的檔案，待 Pages 發布後在設定按「檢查更新」，確認 v1.0.6。不需清除網站資料或重新輸入記錄。
+
+本版變更：`app.js`、`core.js`（版本號）、`index.html`（版本號）、`sw.js`、`package.json`、`version.json`、`tests.mjs`、`README.md`、`TEST-REPORT.md`。ZIP 含完整 24 個檔案。
+
+## V1.0.5 更新內容（歷史）
 
 - 體溫可輸入最多兩位小數，步進為 0.01°C，例如 36.55；整數及一位小數仍可輸入。超過兩位小數會提示修正，不會默默捨去。
 - 圖表資料標籤、選取資訊、歷史記錄、編輯欄位、差異處理與 CSV 匯出統一顯示兩位小數。縱軸刻度沿用原配置，範圍仍為 35～40°C。
@@ -80,7 +91,7 @@
 ## GitHub Pages 部署
 
 1. 建立 Repository，例如 `PWA-BBT-GD`。請勿把個人健康記錄或 Google 私鑰放進 Repository。
-2. 解壓縮 `PWA-BBT-GD-V1_0_5.zip`，進入同名資料夾。
+2. 解壓縮 `PWA-BBT-GD-V1_0_6.zip`，進入同名資料夾。
 3. 將資料夾內檔案平鋪上傳至 Repository 根目錄，確認根目錄直接看得到 `index.html`、`app.js`、`sw.js`、`version.json` 等檔案。
 4. 到 Repository → **Settings → Pages**：Source 選 **Deploy from a branch**，Branch 選 **main**，Folder 選 **/(root)**，按 Save。
 5. 等待 GitHub 顯示發佈網址，通常為 `https://你的帳號.github.io/PWA-BBT-GD/`。
@@ -209,7 +220,7 @@ Client ID／資料夾設定保存在該瀏覽器的本機資料庫，不隨健�
 未來發版可在電腦上執行：
 
 ```bash
-node release.mjs 1.0.6
+node release.mjs 1.0.7
 npm test
 ```
 
