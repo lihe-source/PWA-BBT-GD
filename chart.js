@@ -3,7 +3,7 @@ import { daysBetween } from './core.js';
 
 export function chartLayout(series, start, end, viewportWidth, height = 320, zoom = 1) {
   const days = daysBetween(start, end) + 1;
-  const width = Math.max(160, viewportWidth) * Math.min(128, Math.max(1, Number(zoom) || 1));
+  const width = Math.max(160, viewportWidth, days * 48 + 64) * Math.min(128, Math.max(1, Number(zoom) || 1));
   const top = 26, bottom = Math.max(90, height - 54), left = 32, right = width - 32;
   const unit = (right - left) / days;
   const edge = date => left + daysBetween(start, date) * unit;

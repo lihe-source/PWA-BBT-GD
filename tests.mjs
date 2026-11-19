@@ -20,6 +20,50 @@ const change = (events, id, value, options = {}) => buildChange(events, D, optio
 const recordsView = records => project([buildChange([], D, 'test', records.map((value, i) => ({ type: 'record', id: `record-${i}`, value })))]);
 const preciseRecord = (date='2026-10-18', temp100=3655) => { const r=record(date); delete r.temp10; return {...r,temp100}; };
 
+test('calendar uses 42 Sunday-first days, includes neighboring months and leap day',()=>{
+  const dates=Core.calendarDates('2026-09');assert.equal(dates.length,42);assert.equal(dates[0],'2026-08-30');assert.equal(dates.at(-1),'2026-10-10');
+  assert.ok(Core.calendarDates('2024-02').includes('2024-02-29'));
+  for(const month of ['2026-02','2026-08','2026-12','2027-01']) {const d=Core.calendarDates(month);assert.equal(new Date(d[0]+'T00:00:00Z').getUTCDay(),0);assert.equal(new Set(d).size,42);assert.equal(daysBetween(d[0],d.at(-1)),41);}
+  assert.equal(Core.shiftCalendarMonth('2026-12',1),'2027-01');assert.equal(Core.shiftCalendarMonth('2026-01',-1),'2025-12');assert.throws(()=>Core.calendarDates('2026-13'));
+});
+test('all graph modes show every daily date and reserve readable scrolling space',async()=>{
+  for(const mode of ['day','week','biweek']) {
+    const ui=await appHarness();ui.app.S.prefs={mode,range:'custom',start:'2026-09-01',end:'2026-09-30'};ui.app.renderChart();
+    const html=ui.element('temperature-chart').innerHTML;assert.equal((html.match(/daily-tick/g)||[]).length,30);
+    for(const date of ['09/01','09/02','09/29','09/30'])assert.ok(html.includes(date));
+    const layout=Chart.chartLayout(dailySeries(project([]),'2026-09-01','2026-09-30'),'2026-09-01','2026-09-30',300);assert.ok(layout.unit>=48);assert.ok(layout.width>300);
+  }
+});
+test('independent graph switches hide only the requested series and retain source data',async()=>{
+  const ui=await appHarness();ui.app.S.view=project([buildChange([],D,'test',[{type:'record',id:'r',value:preciseRecord()},{type:'lh',id:'l',value:lhRecord('2026-10-18',65)}])]);
+  const state=stable(currentState(ui.app.S.view));ui.app.S.prefs={mode:'day',range:'custom',start:'2026-10-18',end:'2026-10-18'};
+  for(const [temp,lh] of [[true,true],[true,false],[false,true],[false,false]]) {
+    ui.app.S.prefs.chartTemperature=temp;ui.app.S.prefs.chartLH=lh;ui.app.renderChart();const html=ui.element('temperature-chart').innerHTML;
+    assert.equal(html.includes('class="chart-point"'),temp);assert.equal(html.includes('class="lh-point"'),lh);
+    assert.equal(ui.element('lh-selection').hidden,!lh);assert.equal(ui.element('selection-info:.selection-actions').hidden,!temp);
+    if(!temp&&!lh)assert.match(html,/請勾選體溫或試紙/);
+  }
+  assert.equal(stable(currentState(ui.app.S.view)),state);
+});
+test('calendar displays old and new precision, LH zero and neighboring-month values',async()=>{
+  const ui=await appHarness();ui.app.S.view=project([buildChange([],D,'test',[{type:'record',id:'r',value:preciseRecord('2026-08-31',3655)},{type:'record',id:'old',value:record('2026-09-01',365)},{type:'lh',id:'l',value:lhRecord('2026-08-31',0)}])]);
+  ui.app.S.prefs.calendarMonth='2026-09';ui.app.renderCalendar();const html=ui.element('calendar-grid').innerHTML;
+  assert.equal((html.match(/data-calendar-date=/g)||[]).length,42);assert.match(html,/36\.55/);assert.match(html,/36\.50/);assert.match(html,/0\.00/);assert.match(html,/adjacent/);
+  ui.app.selectCalendarDate('2026-08-31');assert.match(ui.element('calendar-detail').innerHTML,/07:10/);assert.match(ui.element('calendar-detail').innerHTML,/18:30/);
+});
+test('calendar selection toggles off on the same day and can move to a different day',async()=>{
+  const ui=await appHarness();ui.app.S.prefs.calendarMonth='2026-09';ui.app.selectCalendarDate('2026-09-01');assert.equal(ui.app.S.prefs.calendarSelected,'2026-09-01');assert.equal((ui.element('calendar-grid').innerHTML.match(/aria-pressed="true"/g)||[]).length,1);
+  ui.app.selectCalendarDate('2026-09-01');assert.equal(ui.app.S.prefs.calendarSelected,'');assert.equal((ui.element('calendar-grid').innerHTML.match(/aria-pressed="true"/g)||[]).length,0);
+  ui.app.selectCalendarDate('2026-09-01');ui.app.selectCalendarDate('2026-09-02');assert.equal(ui.app.S.prefs.calendarSelected,'2026-09-02');
+});
+test('calendar controls are independent from graph visibility and support month boundaries',async()=>{
+  const ui=await appHarness();ui.app.S.view=recordsView([preciseRecord('2026-09-01')]);ui.app.S.prefs={calendarMonth:'2026-09',chartTemperature:false,chartLH:false};ui.app.renderCalendar();assert.match(ui.element('calendar-grid').innerHTML,/36\.55/);
+  ui.app.S.prefs.calendarTemperature=false;ui.app.renderCalendar();assert.doesNotMatch(ui.element('calendar-grid').innerHTML,/calendar-temp/);assert.match(ui.element('calendar-grid').innerHTML,/calendar-lh/);
+  ui.app.S.prefs.calendarLH=false;ui.app.renderCalendar();assert.doesNotMatch(ui.element('calendar-grid').innerHTML,/calendar-lh/);
+  ui.app.S.prefs.calendarMonth='2026-12';ui.app.moveCalendar(1);assert.equal(ui.app.S.prefs.calendarMonth,'2027-01');ui.app.moveCalendar(-1);assert.equal(ui.app.S.prefs.calendarMonth,'2026-12');
+  ui.app.S.prefs.calendarMonth='2199-12';ui.app.moveCalendar(1);assert.equal(ui.app.S.prefs.calendarMonth,'2199-12');
+});
+
 test('all chart modes bridge missing periods for both curves while keeping missing data empty', async () => {
   for(const mode of ['day','week','biweek']) {
     const ui=await appHarness();
@@ -388,7 +432,7 @@ async function appHarness() {
   const context = { ...Core, ...DB, ...Cloud, ...Chart, h: Core.escapeHTML, URL, Date, Intl, Map, Set, Array, Object, Math, Number, String, JSON, Promise, console, crypto: globalThis.crypto, document, navigator, innerWidth: 390, isSecureContext: true, localStorage: { setItem() {}, getItem() { return null; } }, location: { reload: () => { reloads++; } }, setTimeout: (fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return t; }, clearTimeout, setInterval, clearInterval, AbortController, fetch, matchMedia: () => ({ matches: true, addEventListener() {} }) };
   let source = await readFile(new URL('./app.js', import.meta.url), 'utf8');
   source = source.replace(/^import .+;\n/gm, '').replaceAll('import.meta.url', JSON.stringify(new URL('./app.js', import.meta.url).href)).replace(/\ninit\(\);\s*$/, '\n');
-  source += '\nglobalThis.__app = { S, kv, repo, auth, disconnectGoogle, renderSettings, renderChart, setupServiceWorker, connectionValues, captureForms, chartBounds, stepChart };';
+  source += '\nglobalThis.__app = { S, kv, repo, auth, disconnectGoogle, renderSettings, renderChart, setupServiceWorker, connectionValues, captureForms, chartBounds, stepChart, renderCalendar, selectCalendarDate, moveCalendar };';
   vm.runInNewContext(source, context); context.__app.kv.set = async () => {};
   return { app: context.__app, element, handlers, get reloads() { return reloads; } };
 }
@@ -573,7 +617,7 @@ test('rotation redraw preserves unsaved custom date input until the user applies
 test('rotation changes chart geometry without changing data or selected bounds', () => {
   const view = recordsView([record('2026-10-08')]), series = Core.biweeklySeries(view, '2026-09-01', '2026-10-27');
   const portrait = Chart.chartLayout(series, '2026-09-01', '2026-10-27', 320, 500), landscape = Chart.chartLayout(series, '2026-09-01', '2026-10-27', 800, 173);
-  assert.equal(portrait.positions.length, landscape.positions.length); assert.ok(landscape.positions.at(-1) > portrait.positions.at(-1)); assert.ok(landscape.bottom < portrait.bottom);
+  assert.equal(portrait.positions.length, landscape.positions.length); assert.ok(landscape.positions.at(-1) >= portrait.positions.at(-1)); assert.ok(landscape.bottom < portrait.bottom);
   assert.equal(series[0].start, '2026-09-01'); assert.equal(series.at(-1).displayEnd, '2026-10-27');
 });
 

@@ -1,4 +1,4 @@
-import { APP, VERSION, DEFAULT_PROFILE, CONDITIONS, clone, uuid, stable, escapeHTML as h, addDays, daysBetween, validDate, localNow, formatStamp, tempText, temperature10, parseTemperature, parseRatio, ratioText, lhForPoint, entityKey, project, currentState, dailyValues, dailySeries, weeklySeries, biweeklySeries, periodIntervals, statistics, predict, snapshot, validateSnapshot, snapshotDiff, csv } from './core.js';
+import { APP, VERSION, DEFAULT_PROFILE, CONDITIONS, clone, uuid, stable, escapeHTML as h, addDays, datesBetween, calendarDates, shiftCalendarMonth, daysBetween, validDate, localNow, formatStamp, tempText, temperature10, parseTemperature, parseRatio, ratioText, lhForPoint, entityKey, project, currentState, dailyValues, dailySeries, weeklySeries, biweeklySeries, periodIntervals, statistics, predict, snapshot, validateSnapshot, snapshotDiff, csv } from './core.js';
 import { chartLayout } from './chart.js';
 import { IndexedKV, Repository } from './db.js';
 import { GoogleAuth, Drive, SyncEngine, folderId, loadGoogle, backupFiles } from './drive.js';
@@ -117,7 +117,39 @@ async function refresh({ notify = false } = {}) {
   renderAll();
   if (notify) broadcast();
 }
-function renderAll() { renderChart(); renderHistory(); renderPeriods(); renderLH(); renderSettings(); renderConflictsBanner(); renderStatus(); populateProfile(); }
+function renderAll() { renderChart(); renderCalendar(); renderHistory(); renderPeriods(); renderLH(); renderSettings(); renderConflictsBanner(); renderStatus(); populateProfile(); }
+
+function renderCalendar() {
+  let month=S.prefs.calendarMonth || today().slice(0,7);
+  try { calendarDates(month); } catch { month=today().slice(0,7); }
+  if(month<'1900-01' || month>'2199-12') month=today().slice(0,7);
+  S.prefs.calendarMonth=month;
+  $('calendar-month').value=month;
+  $('calendar-prev').disabled=month==='1900-01'; $('calendar-next').disabled=month==='2199-12';
+  const temp=S.prefs.calendarTemperature !== false, lh=S.prefs.calendarLH !== false, daily=dailyValues(S.view), dates=calendarDates(month);
+  $('calendar-temperature-toggle').checked=temp; $('calendar-lh-toggle').checked=lh;
+  const calendarFocused=document.activeElement?.dataset?.calendarDate;
+  $('calendar-grid').innerHTML=dates.map(date=>{
+    const r=daily.get(date), v=lhForPoint(S.view,{date}), selected=S.prefs.calendarSelected===date;
+    const label=`${date}${temp?`，體溫 ${r?tempText(r.temp10)+' 攝氏':'無記錄'}`:''}${lh?`，試紙 ${ratioText(v.value)}`:''}`;
+    return `<button type="button" data-calendar-date="${date}" class="calendar-day${date.slice(0,7)!==month?' adjacent':''}${selected?' selected':''}${date===today()?' today':''}" aria-label="${h(label)}" aria-pressed="${selected}" ${date===today()?'aria-current="date"':''}><span class="calendar-date">${date.slice(0,7)!==month?`${Number(date.slice(5,7))}/`:''}${Number(date.slice(8))}</span>${temp?`<span class="calendar-temp">${r?tempText(r.temp10):'—'}</span>`:''}${lh?`<span class="calendar-lh">${ratioText(v.value)}</span>`:''}</button>`;
+  }).join('');
+  if(calendarFocused) $('calendar-grid').querySelector(`[data-calendar-date="${calendarFocused}"]`)?.focus();
+  const date=S.prefs.calendarSelected;
+  if(!date || !dates.includes(date)) { $('calendar-detail').textContent='體溫單位 °C；— 表示沒有記錄。'; return; }
+  const r=daily.get(date), v=lhForPoint(S.view,{date});
+  $('calendar-detail').innerHTML=`<strong>${prettyDate(date)}</strong>${temp?`<p>體溫 ${r?`${tempText(r.temp10)}°C · ${h(r.time)}${r.conflict?' · 資料待處理':''}`:'— · 當日無體溫記錄'}</p>`:''}${lh?`<p>試紙 ${v.record?`${ratioText(v.value)} · ${h(v.record.time)}`:'— · 當日無可用試紙記錄'}</p>`:''}${!temp&&!lh?'<p>已隱藏體溫與試紙數值。</p>':''}`;
+}
+function selectCalendarDate(date) {
+  if(!validDate(date)) return;
+  S.prefs.calendarSelected=S.prefs.calendarSelected===date?'':date;
+  renderCalendar(); savePrefs().catch(fail);
+}
+function moveCalendar(delta) {
+  const month=shiftCalendarMonth(S.prefs.calendarMonth || today().slice(0,7),delta);
+  if(month<'1900-01'||month>'2199-12') return;
+  S.prefs.calendarMonth=month; renderCalendar(); savePrefs().catch(fail);
+}
 
 function chartBounds() {
   const now = today(); let start, end = now;
@@ -133,6 +165,8 @@ function renderChart() {
   try { series = mode === 'biweek' ? biweeklySeries(S.view, start, end) : grouped ? weeklySeries(S.view, start, end) : dailySeries(S.view, start, end); }
   catch (e) { $('temperature-chart').innerHTML = `<div class="inline-error">${h(e.message)}</div>`; return; }
   S.series = series;
+  const showTemperature=S.prefs.chartTemperature !== false, showLH=S.prefs.chartLH !== false;
+  $('chart-temperature-toggle').checked=showTemperature; $('chart-lh-toggle').checked=showLH;
   if (!series.some(p => p.date === S.selection)) S.selection = series.find(p => (p.start || p.date) <= today() && (p.displayEnd || p.date) >= today())?.date || series.at(-1)?.date;
   for (const m of ['day', 'week', 'biweek']) $(`mode-${m}`).setAttribute('aria-pressed', String((mode || 'day') === m));
   $('chart-range').value = S.prefs.range; $('custom-range').hidden = S.prefs.range !== 'custom';
@@ -178,8 +212,9 @@ function renderChart() {
     const aria = (grouped ? `${from}至${to}，${p.temp10 === null ? '沒有記錄' : `平均${tempText(p.temp10)}攝氏，已記錄${p.count}天`}` : `${p.date}，${p.record ? `${p.record.time}，${tempText(p.temp10)}攝氏` : '沒有體溫記錄'}`) + `，試紙${ratioText(lhAria.value)}${lhAria.record ? `，${lhAria.record.time}` : ''}`;
     const left = i ? (positions[i - 1] + px) / 2 : 0, right = i < series.length - 1 ? (px + positions[i + 1]) / 2 : width;
     const labelClass = `chart-date${selected ? ' selected' : ''}${from === today() ? ' today' : ''}`;
-    hits += `<g role="button" tabindex="${selected ? 0 : -1}" data-chart-index="${i}" aria-label="${h(aria)}" aria-pressed="${selected}"><rect x="${left}" y="0" width="${right - left}" height="${height}" class="chart-hit"/>${i % labelEvery === 0 ? `<text x="${px}" y="${bottom + 28}" class="${labelClass}">${dateLabel}</text><text x="${px}" y="${bottom + 45}" class="${labelClass}">${label2}</text>` : ''}</g>`;
+    hits += `<g role="button" tabindex="${selected ? 0 : -1}" data-chart-index="${i}" aria-label="${h(aria)}" aria-pressed="${selected}"><rect x="${left}" y="0" width="${right-left}" height="${height}" class="chart-hit"/></g>`;
   }
+  const ticks=datesBetween(start,end).map(date=>{const x=layout.edge(date)+layout.unit/2;return `<text x="${x}" y="${bottom+28}" class="chart-date daily-tick">${prettyDate(date,false)}</text><text x="${x}" y="${bottom+45}" class="chart-date">${['日','一','二','三','四','五','六'][new Date(`${date}T00:00:00Z`).getUTCDay()]}</text>`;}).join('');
   if (segment.length) segments.push(segment);
   const paths = segments.map(points => `<path class="chart-path" d="${points.map(([a, b], i) => `${i ? 'L' : 'M'}${a.toFixed(2)},${b.toFixed(2)}`).join(' ')}"/>`).join('');
   const selectedLine = selectedIndex >= 0 ? `<line x1="${positions[selectedIndex]}" x2="${positions[selectedIndex]}" y1="${top}" y2="${bottom + 11}" class="selected-line"/>` : '';
@@ -187,11 +222,11 @@ function renderChart() {
   const flushLH=()=>{ if(lhSegment.length) lhPath+=`<path class="lh-path" d="${lhSegment.map(([x,y],i)=>`${i?'L':'M'}${x},${y}`).join(' ')}"/>`;lhSegment=[]; };
   series.forEach((p,i)=>{const lh=lhForPoint(S.view,p); if(lh.value===null)return; const px=positions[i],py=bottom-lh.value/100*(bottom-top);lhSegment.push([px,py]);lhDots+=`<rect class="lh-point" x="${px-3}" y="${py-3}" width="6" height="6"/>`;if(showValues || p.date===S.selection) lhDots+=`<text class="lh-label" x="${px}" y="${py+16}">${ratioText(lh.value)}</text>`;});flushLH();
   let rightAxis='';for(let n=100;n>=0;n-=20) rightAxis+=`<text x="5" y="${bottom-n/100*(bottom-top)}">${ratioText(n)}</text>`;
-  const hasValues = series.some(p => p.temp10 !== null || lhForPoint(S.view,p).value!==null);
-  chart.innerHTML = `<svg class="chart-axis" style="height:${height}px" viewBox="0 0 37 ${height}" aria-hidden="true">${axis}</svg><div class="chart-scroll" aria-label="體溫與試紙圖表，可左右捲動"><svg width="${width}" height="${height}" style="height:${height}px" viewBox="0 0 ${width} ${height}" role="group" aria-label="${mode === 'biweek' ? '雙週平均' : grouped ? '每週平均' : '每日'}體溫與試紙折線圖，左縱軸35至40攝氏，右縱軸試紙0.00至1.00">${bands}${lines}${selectedLine}${paths}${lhPath}${dots}${lhDots}${hits}</svg></div><svg class="chart-axis lh-axis" style="height:${height}px" viewBox="0 0 46 ${height}" aria-label="右軸：排卵試紙數值 0.00 至 1.00">${rightAxis}</svg>${!hasValues ? `<div class="chart-empty-overlay"><strong>這段日期尚無體溫或試紙資料</strong><span>已記錄的經期仍會顯示於背景與下緣色帶</span><button class="button secondary compact" type="button" data-action="new-record">${icon('plus')}記錄體溫</button></div>` : ''}`;
+  const hasValues = series.some(p => (showTemperature && p.temp10 !== null) || (showLH && lhForPoint(S.view,p).value!==null));
+  chart.innerHTML = `<svg class="chart-axis" style="height:${height}px" viewBox="0 0 37 ${height}" aria-hidden="true">${axis}</svg><div class="chart-scroll" aria-label="體溫與試紙圖表，可左右捲動"><svg width="${width}" height="${height}" style="height:${height}px" viewBox="0 0 ${width} ${height}" role="group" aria-label="${mode === 'biweek' ? '雙週平均' : grouped ? '每週平均' : '每日'}體溫與試紙折線圖，左縱軸35至40攝氏，右縱軸試紙0.00至1.00">${bands}${lines}${selectedLine}${showTemperature?paths+dots:''}${showLH?lhPath+lhDots:''}${hits}${ticks}</svg></div><svg class="chart-axis lh-axis" style="height:${height}px" viewBox="0 0 46 ${height}" aria-label="右軸：排卵試紙數值 0.00 至 1.00">${rightAxis}</svg>${!hasValues ? `<div class="chart-empty-overlay"><strong>${!showTemperature && !showLH ? '請勾選體溫或試紙' : '所選資料在這段日期尚無記錄'}</strong><span>已記錄的經期仍會顯示於背景與下緣色帶</span><button class="button secondary compact" type="button" data-action="new-record">${icon('plus')}記錄體溫</button></div>` : ''}`;
   const scroll = chart.querySelector('.chart-scroll');
   if (S.scrollToSelection && selectedIndex >= 0) { scroll.scrollLeft = Math.max(0, positions[selectedIndex] - viewportWidth * .65); S.scrollToSelection = false; } else scroll.scrollLeft = oldScroll;
-  $('density-hint').textContent = showValues ? '點日期或資料點查看詳情；缺測日期以前後資料連線' : '資料較密集，點選後顯示數值；缺測日期以前後資料連線';
+  $('density-hint').textContent = showValues ? '左右滑動查看每日日期；缺測日期以前後資料連線' : '左右滑動查看每日日期，點選顯示數值；缺測日期連線';
   $('zoom-label').textContent = `${S.prefs.chartZoom || 1}×`;
   $('zoom-out').disabled = !(S.prefs.chartZoom > 1); $('zoom-in').disabled = S.prefs.chartZoom >= 128;
   $('previous-point').disabled = selectedIndex <= 0; $('next-point').disabled = selectedIndex >= series.length - 1;
@@ -208,10 +243,12 @@ function renderSelection() {
   $('selection-info').innerHTML = `<div><div class="selection-date">${date}</div><span class="selection-time">${h(detail)}</span>${!grouped && point.record?.count > 1 ? '<button type="button" class="text-button" data-action="selected-day">查看當日其他記錄</button>' : ''}</div><div class="selection-actions"><div class="selected-reading"><strong>${tempText(point.temp10)}</strong><span>°C</span></div>${!grouped && point.record ? `<button type="button" class="selection-edit" data-edit-record="${h(point.record.id)}" aria-label="編輯這筆體溫">${icon('edit')}</button>` : ''}</div>`;
   const lh=lhForPoint(S.view,point);
   $('lh-selection').innerHTML=`<strong>試紙 ${ratioText(lh.value)}</strong> <span>${grouped ? `每日最高值的平均 · 已記錄 ${lh.count}／${point.totalDays} 天` : lh.record ? `${h(lh.record.time)} · 當日最高值` : '當日尚無可用試紙記錄'}${lh.rows.some(r=>r.conflict) ? ' · 有資料差異，待處理記錄未納入曲線' : ''}</span>`;
-  $('lh-chart-details').hidden=!lh.rows.length;
+  $('lh-selection').hidden=S.prefs.chartLH === false;
+  $('selection-info').querySelector('.selection-actions').hidden=S.prefs.chartTemperature === false;
+  $('lh-chart-details').hidden=!lh.rows.length || S.prefs.chartLH === false;
   $('lh-chart-rows').innerHTML=lh.rows.map(r=>`<div class="chart-detail-row"><span>${prettyDate(r.date)} ${h(r.time)}${r.conflict?' · 待處理':''}</span><button type="button" class="text-button" data-edit-lh="${h(r.id)}">${ratioText(r.ratio100)} ${icon('edit')}</button></div>`).join('');
   const rows = S.view.records.filter(r => r.date >= from && r.date <= to).sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
-  $('selection-details').hidden = !grouped;
+  $('selection-details').hidden = !grouped || S.prefs.chartTemperature === false;
   $('selection-details-title').textContent = `查看區間實際量測（${rows.length} 筆）`;
   const mainIds = new Set((point.records || []).map(r => r.id));
   $('selection-rows').innerHTML = rows.length ? rows.map(r => `<div class="chart-detail-row"><span>${prettyDate(r.date)} <time>${h(r.time)}</time>${mainIds.has(r.id) ? ' <span class="tag primary-tag">主要</span>' : ''}</span><button type="button" class="text-button" data-edit-record="${h(r.id)}" aria-label="編輯 ${r.date} ${r.time} 體溫">${tempText(r.temp10)}°C ${icon('edit')}</button></div>`).join('') : '<p class="field-help">此區間沒有量測記錄。</p>';
@@ -656,6 +693,11 @@ async function setupServiceWorker() {
 }
 
 function bind() {
+  for(const [id,key,isCalendar] of [['chart-temperature-toggle','chartTemperature',false],['chart-lh-toggle','chartLH',false],['calendar-temperature-toggle','calendarTemperature',true],['calendar-lh-toggle','calendarLH',true]]) $(id).addEventListener('change',()=>{S.prefs[key]=$(id).checked;isCalendar?renderCalendar():renderChart();savePrefs().catch(fail);});
+  $('calendar-prev').addEventListener('click',()=>moveCalendar(-1)); $('calendar-next').addEventListener('click',()=>moveCalendar(1));
+  $('calendar-month').addEventListener('change',()=>{const month=$('calendar-month').value;try{calendarDates(month);if(month<'1900-01'||month>'2199-12')throw new Error('月份需介於 1900～2199 年');S.prefs.calendarMonth=month;renderCalendar();savePrefs().catch(fail);}catch(e){renderCalendar();fail(e);}});
+  $('calendar-today').addEventListener('click',()=>{S.prefs.calendarMonth=today().slice(0,7);renderCalendar();savePrefs().catch(fail);});
+  $('calendar-grid').addEventListener('click',e=>{const button=e.target.closest('[data-calendar-date]');if(button)selectCalendarDate(button.dataset.calendarDate);});
   $('close-modal').addEventListener('click', () => closeModal());
   $('modal').addEventListener('cancel', event => { event.preventDefault(); closeModal(); });
   $('record-form').addEventListener('submit', saveRecord);

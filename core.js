@@ -1,6 +1,6 @@
 /* 溫序 BBT — domain logic, independent of the browser. */
 export const APP = 'bbt-gd';
-export const VERSION = '1.0.6';
+export const VERSION = '1.0.7';
 export const SCHEMA = 1;
 export const CONDITIONS = ['發燒', '睡眠不足', '飲酒', '量測時間不同', '其他干擾'];
 export const DEFAULT_PROFILE = { name: '我的體溫', cycleLength: 28, timeZone: 'Asia/Taipei' };
@@ -331,4 +331,16 @@ export function lhForPoint(view, point) {
   for (const r of rows) if (!r.conflict && (!daily.has(r.date) || r.ratio100 >= daily.get(r.date).ratio100)) daily.set(r.date, r);
   const values = [...daily.values()];
   return { rows, count: values.length, value: values.length ? values.reduce((n,r)=>n+r.ratio100,0)/values.length : null, record: point.start ? null : values[0] || null };
+}
+
+// A fixed six-week calendar, always Sunday first; date arithmetic is UTC-based.
+export function calendarDates(month) {
+  if (!/^\d{4}-\d{2}$/.test(month) || !validDate(`${month}-01`)) throw new Error('月份不正確');
+  const first=`${month}-01`, start=addDays(first,-new Date(`${first}T00:00:00Z`).getUTCDay());
+  return Array.from({length:42},(_,i)=>addDays(start,i));
+}
+export function shiftCalendarMonth(month, delta) {
+  calendarDates(month);
+  const d=new Date(`${month}-01T00:00:00Z`);d.setUTCMonth(d.getUTCMonth()+delta);
+  return d.toISOString().slice(0,7);
 }
