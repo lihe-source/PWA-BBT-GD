@@ -20,6 +20,29 @@ const change = (events, id, value, options = {}) => buildChange(events, D, optio
 const recordsView = records => project([buildChange([], D, 'test', records.map((value, i) => ({ type: 'record', id: `record-${i}`, value })))]);
 const preciseRecord = (date='2026-10-18', temp100=3655) => { const r=record(date); delete r.temp10; return {...r,temp100}; };
 
+test('point-value switch hides both labels in all modes without hiding curves, dates or selection details',async()=>{
+  for(const mode of ['day','week','biweek']) {
+    const ui=await appHarness();ui.app.S.view=project([buildChange([],D,'test',[{type:'record',id:'r',value:preciseRecord()},{type:'lh',id:'l',value:lhRecord('2026-10-18',65)}])]);
+    ui.app.S.prefs={mode,range:'custom',start:'2026-10-18',end:'2026-10-18'};
+    ui.app.renderChart(); assert.equal(ui.element('chart-values-toggle').checked,true);
+    const before=stable(currentState(ui.app.S.view));
+    for(const enabled of [false,true,false]) {
+      ui.app.S.prefs.chartValues=enabled;ui.app.renderChart();const html=ui.element('temperature-chart').innerHTML;
+      assert.equal(html.includes('class="point-value"'),enabled);assert.equal(html.includes('class="lh-label"'),enabled);
+      for(const cls of ['chart-path','lh-path','chart-point','lh-point','daily-tick'])assert.ok(html.includes(cls));
+      assert.match(ui.element('selection-info').innerHTML,/36\.55/);assert.match(ui.element('lh-selection').innerHTML,/0\.65/);
+      assert.equal(stable(currentState(ui.app.S.view)),before);
+    }
+  }
+});
+test('point-value preference survives preference serialization and is independent of series and calendar switches',async()=>{
+  const ui=await appHarness();ui.app.S.view=recordsView([preciseRecord()]);
+  ui.app.S.prefs=JSON.parse(JSON.stringify({mode:'day',range:'custom',start:'2026-10-18',end:'2026-10-18',chartValues:false,calendarMonth:'2026-10'}));
+  ui.app.renderChart();assert.equal(ui.element('chart-values-toggle').checked,false);
+  ui.app.renderCalendar();assert.match(ui.element('calendar-grid').innerHTML,/36\.55/);
+  ui.app.S.prefs.chartValues=true;ui.app.S.prefs.chartTemperature=false;ui.app.renderChart();assert.doesNotMatch(ui.element('temperature-chart').innerHTML,/class="point-value"/);
+});
+
 test('calendar uses 42 Sunday-first days, includes neighboring months and leap day',()=>{
   const dates=Core.calendarDates('2026-09');assert.equal(dates.length,42);assert.equal(dates[0],'2026-08-30');assert.equal(dates.at(-1),'2026-10-10');
   assert.ok(Core.calendarDates('2024-02').includes('2024-02-29'));
@@ -596,11 +619,11 @@ test('aggregate details retain actual measurement times and one-day partial coun
   assert.doesNotMatch(ui.element('selection-info').innerHTML, /06:35|15:20/);
   assert.match(ui.element('selection-rows').innerHTML, /06:35/); assert.match(ui.element('selection-rows').innerHTML, /15:20/);
 });
-test('dense chart retains every date hit target and selection can advance precisely', async () => {
+test('long chart retains daily targets and readable labels and selection can advance precisely', async () => {
   const ui = await appHarness(); ui.app.S.view = recordsView(Array.from({ length: 90 }, (_, i) => record(addDays('2026-07-01', i), 360 + i % 10)));
   ui.app.S.prefs = { mode: 'day', range: 'custom', start: '2026-07-01', end: '2026-09-28' }; ui.app.S.selection = '2026-07-01'; ui.app.renderChart();
   const chart = ui.element('temperature-chart').innerHTML;
-  assert.equal((chart.match(/data-chart-index=/g) || []).length, 90); assert.equal((chart.match(/class="point-value"/g) || []).length, 1);
+  assert.equal((chart.match(/data-chart-index=/g) || []).length, 90); assert.equal((chart.match(/class="point-value"/g) || []).length, 90);
   ui.app.stepChart(1); assert.equal(ui.app.S.selection, '2026-07-02'); assert.match(ui.element('selection-info').innerHTML, /07:10/);
 });
 test('all quick ranges include today and have the requested number of days', async () => {
@@ -689,11 +712,11 @@ test('grouped LH selection preserves measurement details and menstrual shading',
     assert.match(ui.element('temperature-chart').innerHTML,/period-band/);
   }
 });
-test('dense LH charts hide nonselected labels while keeping all date targets', async () => {
+test('long LH charts retain readable labels and every date target', async () => {
   const ui=await appHarness(); ui.app.S.view=lhView(Array.from({length:90},(_,i)=>lhRecord(addDays('2026-07-01',i),i)));
   ui.app.S.prefs={mode:'day',range:'custom',start:'2026-07-01',end:'2026-09-28'}; ui.app.S.selection='2026-07-01'; ui.app.renderChart();
   const chart=ui.element('temperature-chart').innerHTML;
-  assert.equal((chart.match(/class="lh-label"/g)||[]).length,1); assert.equal((chart.match(/data-chart-index=/g)||[]).length,90);
+  assert.equal((chart.match(/class="lh-label"/g)||[]).length,90); assert.equal((chart.match(/data-chart-index=/g)||[]).length,90);
   ui.app.stepChart(1); assert.match(ui.element('lh-selection').innerHTML,/0\.01/);
 });
 test('LH draft preserves a zero input, independent date, time and notes', async () => {

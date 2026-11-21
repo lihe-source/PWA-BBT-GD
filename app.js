@@ -166,6 +166,8 @@ function renderChart() {
   catch (e) { $('temperature-chart').innerHTML = `<div class="inline-error">${h(e.message)}</div>`; return; }
   S.series = series;
   const showTemperature=S.prefs.chartTemperature !== false, showLH=S.prefs.chartLH !== false;
+  const showPointValues=S.prefs.chartValues !== false;
+  $('chart-values-toggle').checked=showPointValues;
   $('chart-temperature-toggle').checked=showTemperature; $('chart-lh-toggle').checked=showLH;
   if (!series.some(p => p.date === S.selection)) S.selection = series.find(p => (p.start || p.date) <= today() && (p.displayEnd || p.date) >= today())?.date || series.at(-1)?.date;
   for (const m of ['day', 'week', 'biweek']) $(`mode-${m}`).setAttribute('aria-pressed', String((mode || 'day') === m));
@@ -180,7 +182,8 @@ function renderChart() {
   const chart = $('temperature-chart'), oldScroll = chart.querySelector('.chart-scroll')?.scrollLeft || 0;
   const viewportWidth = chart.clientWidth > 50 ? chart.clientWidth - 83 : Math.max(240, innerWidth - 90);
   const height = chart.clientHeight >= 150 ? chart.clientHeight : 320;
-  const layout = chartLayout(series, start, end, viewportWidth, height, S.prefs.chartZoom || 1);
+  const readableWidth = showPointValues ? Math.max(viewportWidth, (daysBetween(start,end)+1)*64+64) : viewportWidth;
+  const layout = chartLayout(series, start, end, readableWidth, height, S.prefs.chartZoom || 1);
   const { width, positions, y, top, bottom, showValues, labelEvery } = layout;
   const pred = predict(S.view, today());
   let axis = '', lines = '', bands = '', hits = '', dots = '', segments = [], segment = [];
@@ -204,7 +207,7 @@ function renderChart() {
       const py = y(p.temp10); segment.push([px, py]);
       const arrow = p.temp10 > 400 ? '↑' : p.temp10 < 350 ? '↓' : '';
       dots += `${selected ? `<circle cx="${px}" cy="${py}" r="11" class="selected-halo"/>` : ''}<circle cx="${px}" cy="${py}" r="${selected ? 5.5 : showValues ? 4.2 : 2.5}" class="chart-point${!grouped && !p.record.basal ? ' other' : ''}${p.record?.conflict ? ' conflicted' : ''}"/>`;
-      if (showValues || selected) dots += `<text x="${px}" y="${py - 13}" class="point-value">${arrow}${tempText(p.temp10)}°C</text>`;
+      if (showPointValues && (showValues || selected)) dots += `<text x="${px}" y="${py - 13}" class="point-value">${arrow}${tempText(p.temp10)}°C</text>`;
     }
     const from = p.start || p.date, to = p.displayEnd || p.date;
     const dateLabel = prettyDate(from, false), label2 = grouped ? `— ${prettyDate(to, false)}` : ['日', '一', '二', '三', '四', '五', '六'][new Date(`${p.date}T00:00:00Z`).getUTCDay()];
@@ -220,13 +223,13 @@ function renderChart() {
   const selectedLine = selectedIndex >= 0 ? `<line x1="${positions[selectedIndex]}" x2="${positions[selectedIndex]}" y1="${top}" y2="${bottom + 11}" class="selected-line"/>` : '';
   let lhPath='', lhDots='', lhSegment=[];
   const flushLH=()=>{ if(lhSegment.length) lhPath+=`<path class="lh-path" d="${lhSegment.map(([x,y],i)=>`${i?'L':'M'}${x},${y}`).join(' ')}"/>`;lhSegment=[]; };
-  series.forEach((p,i)=>{const lh=lhForPoint(S.view,p); if(lh.value===null)return; const px=positions[i],py=bottom-lh.value/100*(bottom-top);lhSegment.push([px,py]);lhDots+=`<rect class="lh-point" x="${px-3}" y="${py-3}" width="6" height="6"/>`;if(showValues || p.date===S.selection) lhDots+=`<text class="lh-label" x="${px}" y="${py+16}">${ratioText(lh.value)}</text>`;});flushLH();
+  series.forEach((p,i)=>{const lh=lhForPoint(S.view,p); if(lh.value===null)return; const px=positions[i],py=bottom-lh.value/100*(bottom-top);lhSegment.push([px,py]);lhDots+=`<rect class="lh-point" x="${px-3}" y="${py-3}" width="6" height="6"/>`;if(showPointValues && (showValues || p.date===S.selection)) lhDots+=`<text class="lh-label" x="${px}" y="${py+16}">${ratioText(lh.value)}</text>`;});flushLH();
   let rightAxis='';for(let n=100;n>=0;n-=20) rightAxis+=`<text x="5" y="${bottom-n/100*(bottom-top)}">${ratioText(n)}</text>`;
   const hasValues = series.some(p => (showTemperature && p.temp10 !== null) || (showLH && lhForPoint(S.view,p).value!==null));
   chart.innerHTML = `<svg class="chart-axis" style="height:${height}px" viewBox="0 0 37 ${height}" aria-hidden="true">${axis}</svg><div class="chart-scroll" aria-label="體溫與試紙圖表，可左右捲動"><svg width="${width}" height="${height}" style="height:${height}px" viewBox="0 0 ${width} ${height}" role="group" aria-label="${mode === 'biweek' ? '雙週平均' : grouped ? '每週平均' : '每日'}體溫與試紙折線圖，左縱軸35至40攝氏，右縱軸試紙0.00至1.00">${bands}${lines}${selectedLine}${showTemperature?paths+dots:''}${showLH?lhPath+lhDots:''}${hits}${ticks}</svg></div><svg class="chart-axis lh-axis" style="height:${height}px" viewBox="0 0 46 ${height}" aria-label="右軸：排卵試紙數值 0.00 至 1.00">${rightAxis}</svg>${!hasValues ? `<div class="chart-empty-overlay"><strong>${!showTemperature && !showLH ? '請勾選體溫或試紙' : '所選資料在這段日期尚無記錄'}</strong><span>已記錄的經期仍會顯示於背景與下緣色帶</span><button class="button secondary compact" type="button" data-action="new-record">${icon('plus')}記錄體溫</button></div>` : ''}`;
   const scroll = chart.querySelector('.chart-scroll');
   if (S.scrollToSelection && selectedIndex >= 0) { scroll.scrollLeft = Math.max(0, positions[selectedIndex] - viewportWidth * .65); S.scrollToSelection = false; } else scroll.scrollLeft = oldScroll;
-  $('density-hint').textContent = showValues ? '左右滑動查看每日日期；缺測日期以前後資料連線' : '左右滑動查看每日日期，點選顯示數值；缺測日期連線';
+  $('density-hint').textContent = !showPointValues ? '圖上數值已隱藏；點日期可在上方查看數值' : showValues ? '左右滑動查看每日日期；缺測日期以前後資料連線' : '左右滑動查看每日日期，點選顯示數值；缺測日期連線';
   $('zoom-label').textContent = `${S.prefs.chartZoom || 1}×`;
   $('zoom-out').disabled = !(S.prefs.chartZoom > 1); $('zoom-in').disabled = S.prefs.chartZoom >= 128;
   $('previous-point').disabled = selectedIndex <= 0; $('next-point').disabled = selectedIndex >= series.length - 1;
@@ -693,7 +696,7 @@ async function setupServiceWorker() {
 }
 
 function bind() {
-  for(const [id,key,isCalendar] of [['chart-temperature-toggle','chartTemperature',false],['chart-lh-toggle','chartLH',false],['calendar-temperature-toggle','calendarTemperature',true],['calendar-lh-toggle','calendarLH',true]]) $(id).addEventListener('change',()=>{S.prefs[key]=$(id).checked;isCalendar?renderCalendar():renderChart();savePrefs().catch(fail);});
+  for(const [id,key,isCalendar] of [['chart-values-toggle','chartValues',false],['chart-temperature-toggle','chartTemperature',false],['chart-lh-toggle','chartLH',false],['calendar-temperature-toggle','calendarTemperature',true],['calendar-lh-toggle','calendarLH',true]]) $(id).addEventListener('change',()=>{S.prefs[key]=$(id).checked;isCalendar?renderCalendar():renderChart();savePrefs().catch(fail);});
   $('calendar-prev').addEventListener('click',()=>moveCalendar(-1)); $('calendar-next').addEventListener('click',()=>moveCalendar(1));
   $('calendar-month').addEventListener('change',()=>{const month=$('calendar-month').value;try{calendarDates(month);if(month<'1900-01'||month>'2199-12')throw new Error('月份需介於 1900～2199 年');S.prefs.calendarMonth=month;renderCalendar();savePrefs().catch(fail);}catch(e){renderCalendar();fail(e);}});
   $('calendar-today').addEventListener('click',()=>{S.prefs.calendarMonth=today().slice(0,7);renderCalendar();savePrefs().catch(fail);});

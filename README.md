@@ -1,4 +1,4 @@
-# 溫序 BBT｜PWA-BBT-GD V1.0.7
+# 溫序 BBT｜PWA-BBT-GD V1.0.8
 
 女性每日體溫與月經週期記錄 PWA。原生 HTML / CSS / JavaScript，不需 npm install、不需編譯、不需後端，可直接放上 GitHub Pages。
 
@@ -10,7 +10,19 @@
 
 本 ZIP 不包含真實 Google 憑證或個人資料，也尚未代為建立或部署 GitHub Repository。此版本只需要 OAuth Web Client ID 與資料夾位置，不需要 API Key；不要輸入 Client Secret 或服務帳戶金鑰。
 
-## V1.0.7 更新內容
+## V1.0.8 更新內容
+
+- 圖表新增「顯示圖上數值」勾選開關，預設開啟，同時控制體溫與試紙資料點旁的數字。
+- 關閉後仍保留曲線、資料點及每日日期；點選日期，仍可在上方查看對應數值與量測資訊。週／雙週顯示區間平均及明細。
+- 與「體溫」「試紙」曲線開關、月曆顯示開關各自獨立；日／週／雙週及橫向檢視共用同一設定，並記住於此裝置。
+- 開啟數值時自動增加每日間距，讓數字容易閱讀；日期多時請在圖表內左右滑動。不改寫記錄或平均值。
+- 保留既有月曆、經期著色、缺測連續連線、兩位小數體溫、雲端同步及自動／手動版本更新。
+
+**更新方式：**把本 ZIP 解壓縮後資料夾內的全部檔案，覆蓋原 GitHub Repository 根目錄檔案。待 Pages 發布完成後，在「設定 → 檢查更新」確認 **v1.0.8**。不需清除網站資料。
+
+本版變更：`app.js`、`index.html`、`core.js`（版本號）、`sw.js`、`package.json`、`version.json`、`tests.mjs`、`README.md`、`TEST-REPORT.md`。交付完整 24 個檔案，無新增依賴。
+
+## V1.0.7 更新內容（歷史）
 
 - X 軸逐日顯示每一天的月／日與星期，日／週／雙週皆適用。日期較多時保留至少 48px 的每日間距，可在圖表內左右滑動；兩側座標軸固定。週／雙週仍是區間平均值，點選顯示該區間資訊，不代表每天都有量測。
 - 圖表新增「體溫」「試紙」勾選開關，分別控制曲線、資料點、數值與對應選取明細。可只看一種，也可全部隱藏。座標軸保留作為單位參照。
@@ -106,7 +118,7 @@
 ## GitHub Pages 部署
 
 1. 建立 Repository，例如 `PWA-BBT-GD`。請勿把個人健康記錄或 Google 私鑰放進 Repository。
-2. 解壓縮 `PWA-BBT-GD-V1_0_7.zip`，進入同名資料夾。
+2. 解壓縮 `PWA-BBT-GD-V1_0_8.zip`，進入同名資料夾。
 3. 將資料夾內檔案平鋪上傳至 Repository 根目錄，確認根目錄直接看得到 `index.html`、`app.js`、`sw.js`、`version.json` 等檔案。
 4. 到 Repository → **Settings → Pages**：Source 選 **Deploy from a branch**，Branch 選 **main**，Folder 選 **/(root)**，按 Save。
 5. 等待 GitHub 顯示發佈網址，通常為 `https://你的帳號.github.io/PWA-BBT-GD/`。
@@ -235,7 +247,7 @@ Client ID／資料夾設定保存在該瀏覽器的本機資料庫，不隨健�
 未來發版可在電腦上執行：
 
 ```bash
-node release.mjs 1.0.8
+node release.mjs 1.0.9
 npm test
 ```
 
